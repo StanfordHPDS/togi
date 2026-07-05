@@ -1,0 +1,14 @@
+---
+title: "Lint probe"
+---
+
+### Skipped heading level
+
+```{python}
+import os
+x = 1
+```
+
+See @fig-nonexistent for details.
+
+[unused-def]: https://example.com

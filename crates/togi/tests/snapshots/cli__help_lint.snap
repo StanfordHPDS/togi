@@ -1,0 +1,38 @@
+---
+source: crates/togi/tests/cli.rs
+expression: "help_output(& [\"lint\", \"--help\"])"
+---
+Report lint violations across the project
+
+Runs each language's linter and prints normalized diagnostics (file:line:col, rule, message), exiting 1 when any remain. --fix applies safe autofixes first, then reports what is left; --format json emits a stable, machine-readable schema.
+
+Usage: togi lint [OPTIONS] [PATHS]...
+
+Arguments:
+  [PATHS]...
+          Files or directories to lint (default: the whole project)
+
+Options:
+      --fix
+          Apply safe autofixes first, then report what remains
+
+  -v, --verbose
+          Show more detail (underlying commands, tool names)
+
+      --format <FORMAT>
+          Output format
+          
+          [default: text]
+          [possible values: text, json]
+
+  -q, --quiet
+          Suppress all output except errors
+
+      --no-color
+          Disable colored output
+
+      --config <PATH>
+          Use this config file instead of discovering togi.toml
+
+  -h, --help
+          Print help (see a summary with '-h')

@@ -1,0 +1,28 @@
+---
+source: crates/togi/tests/cli.rs
+expression: "help_output(& [\"tools\", \"clean\", \"--help\"])"
+---
+Remove the tool cache
+
+Deletes the entire managed-tool cache and reports the space freed; tools are re-downloaded on next use. Prompts for confirmation unless --yes is given.
+
+Usage: togi tools clean [OPTIONS]
+
+Options:
+  -v, --verbose
+          Show more detail (underlying commands, tool names)
+
+  -y, --yes
+          Delete without asking for confirmation
+
+  -q, --quiet
+          Suppress all output except errors
+
+      --no-color
+          Disable colored output
+
+      --config <PATH>
+          Use this config file instead of discovering togi.toml
+
+  -h, --help
+          Print help (see a summary with '-h')

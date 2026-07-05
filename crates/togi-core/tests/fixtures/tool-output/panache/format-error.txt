@@ -1,0 +1,2 @@
+Warning: Path not found: nope.qmd
+Error: No supported files found

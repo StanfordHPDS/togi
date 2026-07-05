@@ -1,0 +1,36 @@
+[
+  {
+    "cell": null,
+    "code": "invalid-syntax",
+    "end_location": {
+      "column": 13,
+      "row": 1
+    },
+    "filename": "/project/syntax_error.py",
+    "fix": null,
+    "location": {
+      "column": 12,
+      "row": 1
+    },
+    "message": "Expected a parameter or the end of the parameter list",
+    "noqa_row": null,
+    "url": null
+  },
+  {
+    "cell": null,
+    "code": "invalid-syntax",
+    "end_location": {
+      "column": 1,
+      "row": 2
+    },
+    "filename": "/project/syntax_error.py",
+    "fix": null,
+    "location": {
+      "column": 13,
+      "row": 1
+    },
+    "message": "Expected ')', found newline",
+    "noqa_row": null,
+    "url": null
+  }
+]

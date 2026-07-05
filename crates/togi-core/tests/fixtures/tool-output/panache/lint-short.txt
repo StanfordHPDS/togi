@@ -1,0 +1,9 @@
+lint.qmd:7:4: warning[missing-chunk-labels]: Executable code chunk has no label; add `#| label: ...`
+lint.qmd:8:8: info[F401]: `os` imported but unused
+lint.qmd:12:6: warning[undefined-reference-label]: Cross-reference label '@fig-nonexistent' not found
+lint.qmd:14:1: warning[unused-definition-label]: Reference definition '[unused-def]' is never used
+
+Found 4 issue(s)
+notes.Rmd:3:4: warning[missing-chunk-labels]: Executable code chunk has no label; add `#| label: ...`
+
+Found 1 issue(s)

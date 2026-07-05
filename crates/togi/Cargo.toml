@@ -1,0 +1,36 @@
+[package]
+name = "togi"
+description = "Polyglot formatter and linter for data science projects: R, Python, Quarto/Markdown, and SQL behind one stable interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+togi-core.workspace = true
+
+anstyle.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+self-replace.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+flate2.workspace = true
+insta.workspace = true
+predicates.workspace = true
+sha2.workspace = true
+tar.workspace = true
+tiny_http.workspace = true
+zip.workspace = true
+
+[features]
+# Tests that hit the network or download real tools; excluded from the
+# default offline test run.
+online-tests = ["togi-core/online-tests"]

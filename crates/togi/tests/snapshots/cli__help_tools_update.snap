@@ -1,0 +1,25 @@
+---
+source: crates/togi/tests/cli.rs
+expression: "help_output(& [\"tools\", \"update\", \"--help\"])"
+---
+Refresh tools to release defaults or config pins
+
+For each managed tool, resolves the wanted version (config pin, else this release's default) and installs it if it is not already cached. A failure on one tool is reported and the run continues.
+
+Usage: togi tools update [OPTIONS]
+
+Options:
+  -v, --verbose
+          Show more detail (underlying commands, tool names)
+
+  -q, --quiet
+          Suppress all output except errors
+
+      --no-color
+          Disable colored output
+
+      --config <PATH>
+          Use this config file instead of discovering togi.toml
+
+  -h, --help
+          Print help (see a summary with '-h')

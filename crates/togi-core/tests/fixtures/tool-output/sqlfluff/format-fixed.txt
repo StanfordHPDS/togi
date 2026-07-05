@@ -1,0 +1,10 @@
+==== finding fixable violations ====
+== [events-fmt.sql] FAIL
+L:   1 | P:   7 | LT02 | Expected line break and indent of 4 spaces before
+                       | 'event_id'. [layout.indent]
+L:   2 | P:  12 | LT01 | Unexpected whitespace before comma ','. [layout.spacing]
+L:   3 | P:   1 | LT02 | Expected indent of 4 spaces. [layout.indent]
+L:   5 | P:   1 | CP01 | Keywords must be consistently lower case.
+                       | [capitalisation.keywords]
+== [events-fmt.sql] FIXED
+4 fixable linting violations found

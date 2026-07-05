@@ -1,0 +1,48 @@
+Diff in report.qmd:4:
+ 
+ # Results
+ 
+-First   paragraph with   extra spaces.
++First paragraph with extra spaces.
+ 
+ ```{r}
+ #| label: fit
+-fit<-lm(y~x,data=df)
++
++fit <- lm(y ~ x, data = df)
+ ```
+ 
+ Some middle text that is fine.
+ 
+-Another paragraph    needing a fix much further down in the document, after enough clean content that the formatter reports a second separate diff region.
++Another paragraph needing a fix much further down in the document, after enough
++clean content that the formatter reports a second separate diff region.
+ 
+ ```{python}
+ #| label: tidy
+-import   pandas as pd
++
++import pandas as pd
+ ```
+Diff in notes.Rmd:1:
+ # Notes
+ 
+ ```{r}
+-z=c( 1,2 )
++z <- c(1, 2)
+ ```
+Diff in long.md:1:
+ # Top
+ 
+-Bad   spacing here.
++Bad spacing here.
+ 
+ Clean line number 0 of filler content.
+ 
+---
+Diff in long.md:82:
+ 
+ Clean line number 39 of filler content.
+ 
+-Tail   spacing here too.
++Tail spacing here too.

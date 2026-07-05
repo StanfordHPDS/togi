@@ -1,0 +1,52 @@
+[
+  {
+    "cell": null,
+    "code": "E711",
+    "end_location": {
+      "column": 21,
+      "row": 7
+    },
+    "filename": "/project/fixme.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "value is None",
+          "end_location": {
+            "column": 21,
+            "row": 7
+          },
+          "location": {
+            "column": 8,
+            "row": 7
+          }
+        }
+      ],
+      "message": "Replace with `cond is None`"
+    },
+    "location": {
+      "column": 17,
+      "row": 7
+    },
+    "message": "Comparison to `None` should be `cond is None`",
+    "noqa_row": 7,
+    "url": "https://docs.astral.sh/ruff/rules/none-comparison"
+  },
+  {
+    "cell": null,
+    "code": "F821",
+    "end_location": {
+      "column": 30,
+      "row": 8
+    },
+    "filename": "/project/fixme.py",
+    "fix": null,
+    "location": {
+      "column": 15,
+      "row": 8
+    },
+    "message": "Undefined name `undefined_thing`",
+    "noqa_row": 8,
+    "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+  }
+]

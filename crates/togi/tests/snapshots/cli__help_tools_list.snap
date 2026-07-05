@@ -1,0 +1,25 @@
+---
+source: crates/togi/tests/cli.rs
+expression: "help_output(& [\"tools\", \"list\", \"--help\"])"
+---
+List installed tools and their versions
+
+Prints each installed tool version from the cache (name, version, source, install date) plus the baked default versions for managed tools that are not installed. Never touches the network.
+
+Usage: togi tools list [OPTIONS]
+
+Options:
+  -v, --verbose
+          Show more detail (underlying commands, tool names)
+
+  -q, --quiet
+          Suppress all output except errors
+
+      --no-color
+          Disable colored output
+
+      --config <PATH>
+          Use this config file instead of discovering togi.toml
+
+  -h, --help
+          Print help (see a summary with '-h')

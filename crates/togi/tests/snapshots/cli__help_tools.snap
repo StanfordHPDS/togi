@@ -1,0 +1,31 @@
+---
+source: crates/togi/tests/cli.rs
+expression: "help_output(& [\"tools\", \"--help\"])"
+---
+Manage togi-installed formatter/linter tools (advanced)
+
+Inspects and maintains the private tool cache togi downloads on first use. `list` shows installed and default versions; `update` refreshes to release defaults or config pins; `clean` drops the cache. Most users never need this.
+
+Usage: togi tools [OPTIONS] <COMMAND>
+
+Commands:
+  list    List installed tools and their versions
+  update  Refresh tools to release defaults or config pins
+  clean   Remove the tool cache
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose
+          Show more detail (underlying commands, tool names)
+
+  -q, --quiet
+          Suppress all output except errors
+
+      --no-color
+          Disable colored output
+
+      --config <PATH>
+          Use this config file instead of discovering togi.toml
+
+  -h, --help
+          Print help (see a summary with '-h')

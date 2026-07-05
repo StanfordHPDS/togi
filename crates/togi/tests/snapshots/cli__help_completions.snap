@@ -1,0 +1,31 @@
+---
+source: crates/togi/tests/cli.rs
+expression: "help_output(& [\"completions\", \"--help\"])"
+---
+Generate shell completions
+
+Prints a completion script for the given shell to stdout; redirect it into the location your shell loads completions from.
+
+Usage: togi completions [OPTIONS] <SHELL>
+
+Arguments:
+  <SHELL>
+          Shell to generate completions for
+          
+          [possible values: bash, elvish, fish, powershell, zsh]
+
+Options:
+  -v, --verbose
+          Show more detail (underlying commands, tool names)
+
+  -q, --quiet
+          Suppress all output except errors
+
+      --no-color
+          Disable colored output
+
+      --config <PATH>
+          Use this config file instead of discovering togi.toml
+
+  -h, --help
+          Print help (see a summary with '-h')

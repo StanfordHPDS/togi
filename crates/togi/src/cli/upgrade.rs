@@ -10,6 +10,16 @@
 //! of the running executable. Homebrew and `cargo install` manage their own
 //! copies, so togi refuses to overwrite them and instead points at the right
 //! upgrade command.
+//!
+//! The release lookup asks the GitHub REST API for `releases/latest`.
+//! GitHub answers 404 both when the repository exists but has published no
+//! releases and when the repository does not exist at all; either way there
+//! is nothing to upgrade to, so both shapes deliberately map to the same
+//! friendly "no releases yet" message (and success exit) rather than an
+//! error. The API host can be overridden with the internal
+//! `TOGI_GITHUB_API_BASE_URL` variable, which tests use to point the lookup
+//! at a local fixture server (mirroring `TOGI_RELEASE_BASE_URL` for asset
+//! downloads).
 
 use std::path::Path;
 
@@ -27,6 +37,10 @@ const REPO: &str = "StanfordHPDS/togi";
 
 /// Base URL of the GitHub REST API.
 const GITHUB_API_BASE: &str = "https://api.github.com";
+
+/// Environment override for the API base URL (internal; tests point it at
+/// a local fixture server).
+const API_BASE_ENV: &str = "TOGI_GITHUB_API_BASE_URL";
 
 /// The togi binary's base name (no extension).
 const BINARY_NAME: &str = "togi";
@@ -231,12 +245,14 @@ struct GithubReleaseSource;
 
 impl ReleaseSource for GithubReleaseSource {
     fn latest_tag(&self) -> anyhow::Result<Option<String>> {
-        api_latest_tag(&github_agent(), GITHUB_API_BASE, REPO)
+        let base = std::env::var(API_BASE_ENV).unwrap_or_else(|_| GITHUB_API_BASE.to_string());
+        api_latest_tag(&github_agent(), &base, REPO)
     }
 }
 
-/// The latest release tag via the GitHub REST API. A 404 means the project
-/// has no releases yet — that is `Ok(None)`, not an error.
+/// The latest release tag via the GitHub REST API. A 404 — whether the
+/// repository has published no releases yet or does not exist at all —
+/// means there is nothing to upgrade to: that is `Ok(None)`, not an error.
 fn api_latest_tag(agent: &ureq::Agent, base: &str, repo: &str) -> anyhow::Result<Option<String>> {
     let url = format!("{base}/repos/{repo}/releases/latest");
     let response = agent
@@ -598,6 +614,63 @@ mod tests {
     fn tuple_ordering_matches_semver_precedence() {
         // `plan` relies on tuple ordering for its up-to-date check.
         assert_eq!((0u64, 2u64, 0u64).cmp(&(0, 1, 9)), Ordering::Greater);
+    }
+
+    // --- release lookup against a local fixture server ----------------------
+
+    /// Serve exactly one HTTP response, then shut down. Returns the base
+    /// URL to point [`api_latest_tag`] at.
+    fn serve_one(status: u16, body: &str) -> (String, std::thread::JoinHandle<()>) {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind fixture server");
+        let addr = server.server_addr().to_ip().expect("ip listener");
+        let body = body.to_string();
+        let handle = std::thread::spawn(move || {
+            let request = server.recv().expect("one request");
+            let response = tiny_http::Response::from_string(body).with_status_code(status);
+            let _ = request.respond(response);
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    fn latest_tag_from(status: u16, body: &str) -> anyhow::Result<Option<String>> {
+        let (base, handle) = serve_one(status, body);
+        let result = api_latest_tag(&github_agent(), &base, REPO);
+        handle.join().expect("fixture server thread");
+        result
+    }
+
+    #[test]
+    fn a_published_release_yields_its_tag() {
+        let tag = latest_tag_from(200, "{\"tag_name\": \"v0.2.0\"}").expect("release lookup");
+        assert_eq!(tag.as_deref(), Some("v0.2.0"));
+    }
+
+    #[test]
+    fn a_404_for_a_repo_with_no_releases_is_no_release() {
+        // GitHub 404s `releases/latest` with an empty-ish body when the
+        // repository exists but has published nothing.
+        let tag = latest_tag_from(404, "").expect("a 404 must not be an error");
+        assert_eq!(tag, None);
+    }
+
+    #[test]
+    fn a_404_for_a_missing_repository_is_also_no_release() {
+        // The same 404 arrives with GitHub's not-found JSON body when the
+        // repository itself does not exist; both mean nothing to upgrade to.
+        let body = "{\"message\": \"Not Found\", \
+                     \"documentation_url\": \"https://docs.github.com/rest\", \
+                     \"status\": \"404\"}";
+        let tag = latest_tag_from(404, body).expect("a missing repo must not be an error");
+        assert_eq!(tag, None);
+    }
+
+    #[test]
+    fn a_rate_limit_fails_with_the_status_and_guidance() {
+        let err = latest_tag_from(403, "{\"message\": \"API rate limit exceeded\"}")
+            .expect_err("a 403 must be an error");
+        let rendered = togi_core::term::render_error(&err, false);
+        assert!(rendered.contains("HTTP 403"), "{rendered}");
+        assert!(rendered.contains("hint:"), "{rendered}");
     }
 }
 

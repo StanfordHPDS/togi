@@ -16,6 +16,11 @@ use togi_core::term;
 
 /// Polyglot formatter and linter for data science projects: R, Python,
 /// Quarto/Markdown, and SQL behind one stable interface.
+///
+/// togi routes every file to the right underlying tool and manages its own
+/// copies of those tools, downloading them into a private cache on first
+/// use. No configuration is required; a project togi.toml overrides only
+/// what it sets.
 #[derive(Debug, Parser)]
 #[command(name = "togi", version, arg_required_else_help = true)]
 pub struct Cli {
@@ -56,7 +61,7 @@ pub enum Command {
     /// without touching anything (exit 1 when formatting is needed).
     /// Respects .gitignore, the [format] config, and any per-tool config the
     /// project already has (air.toml, ruff.toml, .sqlfluff).
-    #[command(alias = "fmt")]
+    #[command(visible_alias = "fmt")]
     Format(format::FormatArgs),
     /// Report lint violations across the project
     ///

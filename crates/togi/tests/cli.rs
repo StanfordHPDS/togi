@@ -37,6 +37,16 @@ help_snapshot!(help_version, "version");
 help_snapshot!(help_upgrade, "upgrade");
 
 #[test]
+fn root_help_advertises_the_fmt_alias() {
+    // The alias is discoverable, not a hidden easter egg.
+    let help = help_output(&["--help"]);
+    assert!(
+        help.contains("[aliases: fmt]"),
+        "`togi --help` should name the `fmt` alias:\n{help}"
+    );
+}
+
+#[test]
 fn fmt_is_an_alias_for_format() {
     // The alias must parse to the same command; --help output proves the
     // route without touching any files.

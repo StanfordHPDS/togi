@@ -1287,6 +1287,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "clap_complete",
+ "directories",
  "flate2",
  "insta",
  "predicates",

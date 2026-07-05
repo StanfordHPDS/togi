@@ -2,12 +2,14 @@
 source: crates/togi/tests/cli.rs
 expression: "help_output(& [\"--help\"])"
 ---
-Polyglot formatter and linter for data science projects: R, Python, Quarto/Markdown, and SQL behind one stable interface
+Polyglot formatter and linter for data science projects: R, Python, Quarto/Markdown, and SQL behind one stable interface.
+
+togi routes every file to the right underlying tool and manages its own copies of those tools, downloading them into a private cache on first use. No configuration is required; a project togi.toml overrides only what it sets.
 
 Usage: togi [OPTIONS] <COMMAND>
 
 Commands:
-  format       Format project files in place (R, Python, Quarto, SQL, Markdown)
+  format       Format project files in place (R, Python, Quarto, SQL, Markdown) [aliases: fmt]
   lint         Report lint violations across the project
   tools        Manage togi-installed formatter/linter tools (advanced)
   completions  Generate shell completions
@@ -16,9 +18,20 @@ Commands:
   help         Print this message or the help of the given subcommand(s)
 
 Options:
-  -v, --verbose        Show more detail (underlying commands, tool names)
-  -q, --quiet          Suppress all output except errors
-      --no-color       Disable colored output
-      --config <PATH>  Use this config file instead of discovering togi.toml
-  -h, --help           Print help
-  -V, --version        Print version
+  -v, --verbose
+          Show more detail (underlying commands, tool names)
+
+  -q, --quiet
+          Suppress all output except errors
+
+      --no-color
+          Disable colored output
+
+      --config <PATH>
+          Use this config file instead of discovering togi.toml
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version

@@ -22,6 +22,7 @@ ureq.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
+directories.workspace = true
 flate2.workspace = true
 insta.workspace = true
 predicates.workspace = true

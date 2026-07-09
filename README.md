@@ -1,10 +1,9 @@
 # togi
 
-**togi** (研ぎ) is one formatter and
+togi (研ぎ) is a formatter and
 linter for data science projects. It covers R, Python, Quarto, Markdown, and
 SQL behind a single stable interface, and it manages its own copies of the
-underlying tools — [air], [ruff], [panache], and [sqlfluff] — the way rustup
-and uv manage toolchains. You never install, version, or configure those
+underlying tools, [air], [ruff], [panache], and [sqlfluff]. You never install, version, or configure those
 tools yourself, and when one of them changes, the togi interface does not.
 
 - **One command for the whole project.** `togi format` and `togi lint` route
@@ -57,7 +56,7 @@ $ togi format
 ✓ 14 files formatted, 3 changed
 ```
 
-Check formatting without rewriting anything — exit code 1 when something
+Check formatting without rewriting anything---exit code 1 when something
 would change, so it drops straight into CI:
 
 ```console
@@ -85,7 +84,7 @@ $ togi lint --fix
 Machine-readable output for CI and editors (`togi lint --format json`) prints
 pure JSON on stdout with project-root-relative paths.
 
-Inspect the managed tools — versions are baked per togi release, cached
+Inspect the managed tools---versions are baked per togi release, cached
 privately, and never touch your system installs:
 
 ```console

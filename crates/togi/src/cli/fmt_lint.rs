@@ -37,10 +37,12 @@ pub fn project_root(cwd: &Path, explicit_config: bool, project_config: Option<&P
 }
 
 /// Discover the files a run covers: walk `paths` (the whole project from
-/// `root` when empty), respecting `.gitignore` plus the `exclude` globs
-/// from `selection` (anchored at `root`), then keep only the languages
-/// `selection` enables. Discovered paths come back relative to `cwd` when
-/// they sit beneath it, so tool output and summaries stay readable.
+/// `root` when empty), respecting `.gitignore` plus togi's built-in
+/// package-manager excludes ([`fsx::DEFAULT_EXCLUDES`]) and the `exclude`
+/// globs from `selection` (all anchored at `root`), then keep only the
+/// languages `selection` enables. Discovered paths come back relative to
+/// `cwd` when they sit beneath it, so tool output and summaries stay
+/// readable.
 ///
 /// `section` names the config table (`format` / `lint`) in warnings about
 /// unknown language names.
@@ -56,7 +58,14 @@ pub fn discover(
     } else {
         paths.iter().map(|path| absolute(cwd, path)).collect()
     };
-    let outcome = fsx::walk(&targets, &selection.exclude, Some(root)).map_err(walk_error)?;
+    // togi's built-in excludes (package-manager directories) always apply;
+    // the config `exclude` layers additively on top of them.
+    let mut excludes: Vec<String> = fsx::DEFAULT_EXCLUDES
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    excludes.extend(selection.exclude.iter().cloned());
+    let outcome = fsx::walk(&targets, &excludes, Some(root)).map_err(walk_error)?;
     let mut warnings = outcome.warnings;
     let files: Vec<PathBuf> = outcome
         .files
@@ -302,6 +311,41 @@ mod tests {
         // Paths under the cwd come back relative for readable output.
         assert_eq!(names(&discovered.groups[&Language::R]), vec!["analysis.R"]);
         assert_eq!(names(&discovered.groups[&Language::Sql]), vec!["query.sql"]);
+    }
+
+    #[test]
+    fn discover_skips_renv_and_rv_by_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "renv/activate.R", "");
+        write(root, "renv/settings.json", "");
+        write(root, "rv/library/pkg.R", "");
+        write(root, "analysis.R", "");
+
+        // Empty config `exclude`: the built-in package-manager excludes still
+        // keep togi out of renv/ and rv/.
+        let discovered = discover(root, &[], &selection(&["r"], &[]), root, "format")
+            .expect("discovery succeeds");
+
+        assert_eq!(discovered.file_count, 1);
+        assert_eq!(names(&discovered.groups[&Language::R]), vec!["analysis.R"]);
+    }
+
+    #[test]
+    fn discover_adds_config_excludes_on_top_of_the_built_in_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "renv/activate.R", "");
+        write(root, "data/scratch.R", "");
+        write(root, "analysis.R", "");
+
+        // A user `exclude` is additive, not a replacement: `data/**` is
+        // skipped *and* the built-in `renv/**` still applies.
+        let discovered = discover(root, &[], &selection(&["r"], &["data/**"]), root, "format")
+            .expect("discovery succeeds");
+
+        assert_eq!(discovered.file_count, 1);
+        assert_eq!(names(&discovered.groups[&Language::R]), vec!["analysis.R"]);
     }
 
     #[test]

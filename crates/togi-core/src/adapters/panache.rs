@@ -57,7 +57,9 @@ use crate::adapters::{
 use crate::term::HintExt;
 
 /// The default panache config togi supplies when neither the project nor
-/// the user has one: it opts the managed tools in for embedded chunks.
+/// the user has one: it opts the managed tools in for embedded chunks and
+/// wraps prose one sentence per line (overriding panache's `reflow`
+/// default).
 const DEFAULT_CONFIG: &str = "\
 [formatters]
 r = \"air\"
@@ -65,6 +67,9 @@ python = \"ruff\"
 
 [linters]
 python = \"ruff\"
+
+[format]
+wrap = \"sentence\"
 ";
 
 /// Formats and lints Quarto/R Markdown/Markdown files via panache.
@@ -705,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn default_config_is_valid_toml_enabling_the_managed_tools() {
+    fn default_config_enables_managed_tools_and_sentence_wrapping() {
         let value: toml::Table = DEFAULT_CONFIG.parse().expect("default config parses");
         assert_eq!(
             value["formatters"]["r"].as_str(),
@@ -714,6 +719,9 @@ mod tests {
         );
         assert_eq!(value["formatters"]["python"].as_str(), Some("ruff"));
         assert_eq!(value["linters"]["python"].as_str(), Some("ruff"));
+        // togi's default prose wrapping is one sentence per line, overriding
+        // panache's own `reflow` default.
+        assert_eq!(value["format"]["wrap"].as_str(), Some("sentence"));
     }
 
     #[test]

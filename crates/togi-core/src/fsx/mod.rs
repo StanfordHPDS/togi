@@ -9,4 +9,4 @@ mod registry;
 mod walk;
 
 pub use registry::{ExtensionRegistry, Language, group_by_language};
-pub use walk::{FsxError, walk};
+pub use walk::{DEFAULT_EXCLUDES, FsxError, walk};

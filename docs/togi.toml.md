@@ -77,7 +77,18 @@ formatted but not linted by default.
 | Key | Type | Default (`[format]`) | Default (`[lint]`) | Description |
 |---|---|---|---|---|
 | `languages` | array of strings | `["r", "python", "quarto", "sql", "markdown"]` | `["r", "python", "quarto", "sql"]` | Language buckets to include. Recognized names: `r`, `python`, `quarto`, `markdown`, `sql` (case-insensitive). Unrecognized names warn and are skipped, so a typo never silently disables a run. |
-| `exclude` | array of strings | `[]` | `[]` | gitignore-style glob patterns, **additive** to the repo's `.gitignore`, anchored at the project root. Matching files are never formatted or linted. |
+| `exclude` | array of strings | `[]` | `[]` | gitignore-style glob patterns, **additive** to the repo's `.gitignore` and to togi's built-in excludes, anchored at the project root. Matching files are never formatted or linted. |
+
+Beyond `.gitignore` and your `exclude`, togi always skips the package-manager
+directories `renv/` and `rv/` — they hold installed R libraries and generated
+files (like `renv/activate.R`) that no formatter should touch. Your `exclude`
+adds to these built-ins; it does not replace them. uv's `.venv/` needs no entry
+because togi skips hidden files and directories.
+
+For Quarto and Markdown, togi wraps prose one sentence per line by default
+(panache's `wrap = "sentence"`), rather than reflowing paragraphs to a fixed
+width. This applies only when the project has no panache config of its own; a
+`.panache.toml` (or `panache.toml`) in the project takes full control.
 
 ## `[sql]`
 

@@ -118,12 +118,14 @@ failed, `2` usage error.
 
 ## Configuration
 
-togi needs no configuration. To change what it covers, drop a `togi.toml` at
-the project root; it overrides only the keys it sets:
+togi needs no configuration. Out of the box it honors your `.gitignore`, skips
+hidden paths and the package-manager directories `renv/` and `rv/`, and wraps
+Quarto/Markdown prose one sentence per line. To change what it covers, drop a
+`togi.toml` at the project root; it overrides only the keys it sets:
 
 ```toml
 [format]
-exclude = ["renv/**"]
+exclude = ["vendor/**"]   # added on top of the built-in excludes
 
 [sql]
 dialect = "duckdb"

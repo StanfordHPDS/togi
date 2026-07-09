@@ -6,6 +6,15 @@ use std::path::{Path, PathBuf};
 use ignore::WalkBuilder;
 use ignore::overrides::{Override, OverrideBuilder};
 
+/// Directories togi always skips: package-manager libraries and the
+/// generated files inside them that no formatter or linter should touch
+/// (`renv/` and `rv/` keep files like `renv/activate.R` tracked in git, so
+/// `.gitignore` alone does not cover them). Additive to `.gitignore` and to
+/// the user's configured `exclude`, and rooted at the project root like any
+/// anchored gitignore pattern. uv's `.venv/` needs no entry — it is hidden,
+/// and hidden paths are already skipped.
+pub const DEFAULT_EXCLUDES: &[&str] = &["renv/**", "rv/**"];
+
 /// Errors from file discovery. Messages tell the user what to do next;
 /// rendering is the caller's job (via `term`), never this module's.
 #[derive(Debug, thiserror::Error)]

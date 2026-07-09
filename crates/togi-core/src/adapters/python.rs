@@ -97,9 +97,9 @@ fn passthrough_args<'a>(ctx: &'a ToolCtx) -> &'a [String] {
 fn run_ruff(ctx: &ToolCtx, args: &[OsString]) -> anyhow::Result<Output> {
     let binary = ctx.tool_path(TOOL)?;
     crate::adapters::log_command(ctx, &binary, args);
-    Command::new(&binary)
-        .args(args)
-        .output()
+    let mut cmd = Command::new(&binary);
+    cmd.args(args);
+    crate::adapters::process::retry_etxtbsy(|| cmd.output())
         .with_context(|| format!("could not run ruff at {}", binary.display()))
         .hint("reinstall the managed toolchain with `togi tools update` and rerun")
 }

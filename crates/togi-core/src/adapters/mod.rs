@@ -10,6 +10,7 @@
 mod diagnostic;
 mod outcome;
 mod panache;
+mod process;
 mod python;
 mod r;
 mod registry;

@@ -154,9 +154,9 @@ fn run(subcommand: &[&str], files: &[PathBuf], ctx: &ToolCtx) -> anyhow::Result<
     let binary = ctx.tool_path(TOOL)?;
     let args = build_args(subcommand, files, ctx.config);
     crate::adapters::log_command(ctx, &binary, &args);
-    Command::new(&binary)
-        .args(&args)
-        .output()
+    let mut cmd = Command::new(&binary);
+    cmd.args(&args);
+    crate::adapters::process::retry_etxtbsy(|| cmd.output())
         .with_context(|| format!("could not run `{}`", binary.display()))
         .hint("run `togi tools clean` to reset the managed tool cache, then rerun")
 }

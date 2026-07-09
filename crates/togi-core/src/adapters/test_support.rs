@@ -212,6 +212,7 @@ impl FakeToolPaths {
     }
 
     /// Add (or replace) a canned answer for `tool`.
+    #[cfg(unix)]
     pub fn insert(&mut self, tool: &str, path: &std::path::Path) {
         self.paths.insert(tool.to_string(), path.to_path_buf());
     }

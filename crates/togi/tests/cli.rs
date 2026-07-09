@@ -12,7 +12,12 @@ fn togi() -> Command {
 
 fn help_output(args: &[&str]) -> String {
     let assert = togi().args(args).assert().success();
-    String::from_utf8(assert.get_output().stdout.clone()).expect("help output should be UTF-8")
+    let stdout =
+        String::from_utf8(assert.get_output().stdout.clone()).expect("help output should be UTF-8");
+    // clap renders the usage line from `argv[0]`, which is `togi.exe` on
+    // Windows and `togi` elsewhere; normalize the extension away so one set
+    // of snapshots is canonical across platforms.
+    stdout.replace("togi.exe", "togi")
 }
 
 /// Snapshot `togi <args...> --help` under the test's name.

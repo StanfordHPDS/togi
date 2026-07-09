@@ -156,9 +156,9 @@ fn invocation(check: bool, extra: &[String], files: &[PathBuf]) -> Vec<OsString>
 /// message to stderr; stdout stays empty).
 fn run_air(ctx: &ToolCtx, bin: &Path, args: &[OsString]) -> anyhow::Result<(ExitStatus, String)> {
     crate::adapters::log_command(ctx, bin, args);
-    let output = std::process::Command::new(bin)
-        .args(args)
-        .output()
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(args);
+    let output = crate::adapters::process::retry_etxtbsy(|| cmd.output())
         .with_context(|| format!("could not run air at {}", bin.display()))
         .hint("run `togi tools update` to reinstall the managed air binary")?;
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();

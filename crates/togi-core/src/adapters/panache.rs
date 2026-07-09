@@ -96,7 +96,7 @@ impl PanacheAdapter {
     /// An adapter whose config discovery is pinned to `start` and `user`
     /// instead of the real input files and home, so tests never depend on
     /// the machine they run on.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with_config_search(start: &Path, user: &Path) -> PanacheAdapter {
         PanacheAdapter {
             config_search_start: Some(start.to_path_buf()),
@@ -106,7 +106,7 @@ impl PanacheAdapter {
 
     /// An adapter with only the user-level config pinned, so the tree
     /// walk runs from the (absolute) input files exactly as in production.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with_user_config(user: &Path) -> PanacheAdapter {
         PanacheAdapter {
             config_search_start: None,
@@ -165,7 +165,7 @@ impl PanacheAdapter {
         // managed copies first so they always win.
         cmd.env("PATH", prepend_tool_dirs(&[&air, &ruff])?);
 
-        cmd.output()
+        crate::adapters::process::retry_etxtbsy(|| cmd.output())
             .with_context(|| format!("could not run panache (`{}`)", panache.display()))
             .hint("run `togi tools clean` to reset the tool cache, then retry")
     }

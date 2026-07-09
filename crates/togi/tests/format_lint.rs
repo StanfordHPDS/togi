@@ -28,9 +28,14 @@ use predicates::prelude::*;
 
 /// Baked default tool versions (mirrors `src/tools/versions.rs`; drift
 /// makes the fake cache miss, which fails loudly against the dead URL).
+/// Only the shim tests consume these, and shims are unix-only.
+#[cfg(unix)]
 const AIR_DEFAULT: &str = "0.10.0";
+#[cfg(unix)]
 const RUFF_DEFAULT: &str = "0.14.0";
+#[cfg(unix)]
 const PANACHE_DEFAULT: &str = "2.60.0";
+#[cfg(unix)]
 const SQLFLUFF_DEFAULT: &str = "3.4.0";
 
 /// A throwaway copy of the mixed-project fixture plus isolated config and
@@ -72,10 +77,12 @@ impl Sandbox {
         }
     }
 
+    #[cfg(unix)]
     fn write_project_config(&self, contents: &str) {
         fs::write(self.project.join("togi.toml"), contents).expect("write togi.toml");
     }
 
+    #[cfg(unix)]
     fn write_file(&self, rel: &str, contents: &str) {
         let path = self.project.join(rel);
         if let Some(parent) = path.parent() {
@@ -84,6 +91,7 @@ impl Sandbox {
         fs::write(path, contents).expect("write project file");
     }
 
+    #[cfg(unix)]
     fn read_file(&self, rel: &str) -> String {
         fs::read_to_string(self.project.join(rel)).expect("read project file")
     }

@@ -1,6 +1,6 @@
 # togi
 
-**togi** (研ぎ — the Japanese craft of blade polishing) is one formatter and
+**togi** (研ぎ) is one formatter and
 linter for data science projects. It covers R, Python, Quarto, Markdown, and
 SQL behind a single stable interface, and it manages its own copies of the
 underlying tools — [air], [ruff], [panache], and [sqlfluff] — the way rustup
@@ -11,7 +11,7 @@ tools yourself, and when one of them changes, the togi interface does not.
   every file to the right tool and merge the results into one report with one
   exit code.
 - **Self-managing tools.** On first use, togi downloads the exact tool
-  versions baked into your release into a private cache. Every run after that
+  versions required into a private cache. Every run after that
   is offline. Projects can pin different versions when they need to.
 - **Zero config by default.** Sensible defaults for every language; a
   `togi.toml` overrides only what it sets, and per-tool config a project
@@ -27,9 +27,8 @@ tools yourself, and when one of them changes, the togi interface does not.
 
 ## Install
 
-Every tagged release ships prebuilt binaries for macOS, Linux, and Windows,
-an installer script, and a Homebrew formula. Those artifacts land with the
-first tagged release; until then, install from source.
+Every tagged release has prebuilt binaries for macOS, Linux, and Windows,
+an installer script, and a Homebrew formula.
 
 With the installer script:
 
@@ -118,9 +117,9 @@ failed, `2` usage error.
 
 ## Configuration
 
-togi needs no configuration. Out of the box it honors your `.gitignore`, skips
+togi needs no configuration. Out of the box it, honors your `.gitignore`, skips
 hidden paths and the package-manager directories `renv/` and `rv/`, and wraps
-Quarto/Markdown prose one sentence per line. To change what it covers, drop a
+Quarto/Markdown prose one sentence per line. To change what it covers, create a
 `togi.toml` at the project root; it overrides only the keys it sets:
 
 ```toml

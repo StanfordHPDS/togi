@@ -49,7 +49,7 @@ impl SqlFluffAdapter {
 
     /// An adapter whose config lookup sees `env` instead of the real
     /// machine, so tests never depend on where they run.
-    #[cfg(test)]
+    #[cfg(all(test, any(unix, feature = "online-tests")))]
     pub(crate) fn with_config_env(env: ConfigEnv) -> SqlFluffAdapter {
         SqlFluffAdapter {
             config_env: Some(env),

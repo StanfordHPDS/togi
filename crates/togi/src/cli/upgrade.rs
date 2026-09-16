@@ -678,16 +678,20 @@ mod tests {
 mod online_tests {
     use super::*;
 
-    /// The real repo has cut no release yet, so `releases/latest` 404s.
-    /// `togi upgrade` must read that as "no release yet" (`Ok(None)`), not
-    /// an error. Run with:
-    /// `cargo test --features online-tests -- --ignored`
+    /// The real repo has a published release, so `releases/latest` must
+    /// return a tag that parses as a valid version. The exact version is
+    /// not pinned here, since new releases should not break this test. Run
+    /// with: `cargo test --features online-tests -- --ignored`
     #[test]
     #[ignore = "queries the real GitHub releases API"]
-    fn latest_release_is_none_while_the_repo_has_no_releases() {
+    fn latest_release_tag_parses_as_a_version() {
         let agent = github_agent();
         let tag = api_latest_tag(&agent, GITHUB_API_BASE, REPO)
-            .expect("a 404 for a repo with no releases must be Ok(None), not an error");
-        assert_eq!(tag, None, "expected no release yet, got {tag:?}");
+            .expect("querying the real releases API must not error")
+            .expect("the repo has a published release");
+        assert!(
+            parse_version(&tag).is_some(),
+            "expected a valid version tag, got {tag:?}"
+        );
     }
 }

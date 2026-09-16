@@ -59,7 +59,7 @@ pub enum Command {
     /// are given), routes each to its formatter behind one interface, and
     /// rewrites them in place. Pass --check to report what would change
     /// without touching anything (exit 1 when formatting is needed).
-    /// Respects .gitignore, the [format] config, and any per-tool config the
+    /// Respects .gitignore, the `[format]` config, and any per-tool config the
     /// project already has (air.toml, ruff.toml, .sqlfluff).
     #[command(visible_alias = "fmt")]
     Format(format::FormatArgs),

@@ -339,7 +339,7 @@ exit 0
 "#;
 
     /// sqlfluff protocol: `lint --format json [--rules R] [--dialect D]
-    /// <files>` (JSON reports, exit 1 on findings) and `format`/`fix`
+    /// [--config P] <files>` (JSON reports, exit 1 on findings) and `format`/`fix`
     /// rewriting in place.
     const SQLFLUFF_SHIM: &str = r#"#!/bin/sh
 sub="$1"; shift
@@ -347,7 +347,7 @@ skip=0; files=""
 for a in "$@"; do
   if [ $skip -eq 1 ]; then skip=0; continue; fi
   case "$a" in
-    --format|--rules|--dialect) skip=1 ;;
+    --format|--rules|--dialect|--config) skip=1 ;;
     --*) ;;
     *) files="$files $a" ;;
   esac
@@ -775,13 +775,34 @@ exit 0
 mod online {
     use super::*;
 
+    impl Sandbox {
+        /// An empty home directory inside the sandbox, so neither togi nor
+        /// the real tools read the developer's own configuration.
+        fn fake_home(&self) -> PathBuf {
+            let home = self._root.path().join("home");
+            fs::create_dir_all(&home).expect("create fake home");
+            home
+        }
+
+        /// `togi <args...>` with network access and `home` as the home
+        /// directory (and no XDG config outside it).
+        fn cmd_with_home(&self, home: &Path, args: &[&str]) -> Command {
+            let mut cmd = self.cmd_allowing_network(args);
+            cmd.env("HOME", home)
+                .env("USERPROFILE", home)
+                .env("XDG_CONFIG_HOME", home.join(".config"));
+            cmd
+        }
+    }
+
     #[test]
     #[ignore = "downloads the real managed tools from the network"]
     fn real_tools_format_and_lint_the_mixed_project_end_to_end() {
         let sb = Sandbox::with_fixture();
+        let home = sb.fake_home();
 
         // format --check flags the misformatted files of every language.
-        sb.cmd_allowing_network(&["format", "--check"])
+        sb.cmd_with_home(&home, &["format", "--check"])
             .assert()
             .code(1)
             .stdout(
@@ -792,7 +813,7 @@ mod online {
             );
 
         // lint reports real diagnostics (ruff's F401/F821 at minimum).
-        sb.cmd_allowing_network(&["lint"]).assert().code(1).stdout(
+        sb.cmd_with_home(&home, &["lint"]).assert().code(1).stdout(
             predicate::str::contains("violations.py").and(predicate::str::contains("F401")),
         );
 
@@ -817,8 +838,8 @@ mod online {
         assert!(items.iter().any(|item| item["code"] == "F401"), "{stdout}");
 
         // Formatting in place converges: afterwards --check passes.
-        sb.cmd_allowing_network(&["format"]).assert().success();
-        sb.cmd_allowing_network(&["format", "--check"])
+        sb.cmd_with_home(&home, &["format"]).assert().success();
+        sb.cmd_with_home(&home, &["format", "--check"])
             .assert()
             .success()
             .stdout(predicate::str::contains("nothing would change"));

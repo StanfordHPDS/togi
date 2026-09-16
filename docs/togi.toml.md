@@ -53,7 +53,7 @@ languages = ["r", "python", "quarto", "sql"]
 exclude = []
 
 [sql]
-dialect = "bigquery"   # passed to sqlfluff when the project has no .sqlfluff
+dialect = "bigquery"   # passed to sqlfluff when no .sqlfluff applies
 
 # Version pins for managed tools; omit to use the versions baked into this
 # togi release. A bare `name = "x.y.z"` is a pin.
@@ -87,14 +87,53 @@ because togi skips hidden files and directories.
 
 For Quarto and Markdown, togi wraps prose one sentence per line by default
 (panache's `wrap = "sentence"`), rather than reflowing paragraphs to a fixed
-width. This applies only when the project has no panache config of its own; a
-`.panache.toml` (or `panache.toml`) in the project takes full control.
+width. togi's default also turns off panache's `missing-chunk-labels` lint,
+which otherwise flags executable code chunks without a `#| label:`. Both
+apply only when neither the project nor the user has a panache config of
+their own. A project `.panache.toml`, `panache.toml`, or
+`.config/panache.toml` found while walking up from the input files, or a
+user-level config at `~/.config/panache/config.toml` (or
+`$XDG_CONFIG_HOME/panache/config.toml`), takes full control.
 
 ## `[sql]`
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `dialect` | string | `"bigquery"` | SQL dialect passed to sqlfluff. Only applied when the project has not configured sqlfluff itself (a `.sqlfluff` file wins). |
+| `dialect` | string | `"bigquery"` | SQL dialect passed to sqlfluff. Only applied when neither the project nor the user has configured sqlfluff (a `.sqlfluff` file wins). |
+
+When neither the project nor the user has sqlfluff config, togi also applies two
+sqlfluff settings alongside the dialect: `large_file_skip_byte_limit = 0`, so
+large SQL files are linted rather than skipped, and
+`unquoted_identifiers_policy = none` for the `capitalisation.identifiers`
+rule, so identifier case is left as written.
+
+Any sqlfluff config that sqlfluff itself would read takes full control
+instead. That means:
+
+- a `.sqlfluff` file
+- a sqlfluff section in `setup.cfg`, `tox.ini`, or `pep8.ini`
+- a `tool.sqlfluff` table in `pyproject.toml`
+- a `pyproject.toml` that togi cannot read or parse, so sqlfluff reports the
+  problem itself
+
+found in any directory sqlfluff searches:
+
+- the working directory
+- the directories between the home directory and each input file
+- the directories from the working directory (or its nearest ancestor shared
+  with the file) down to each input file
+- the home directory itself
+- sqlfluff's user config directory: `~/.config/sqlfluff` whenever that
+  directory exists, on every platform, Windows included; otherwise
+  `$XDG_CONFIG_HOME/sqlfluff` on Linux and macOS when `XDG_CONFIG_HOME` is
+  set, and without it `~/.config/sqlfluff` on Linux and
+  `~/Library/Application Support/sqlfluff` on macOS; on Windows,
+  `%LOCALAPPDATA%\sqlfluff\sqlfluff`
+
+togi passes these two settings to sqlfluff as a generated `--config` file.
+sqlfluff honors only the last `--config` it receives and does not merge
+config files, so a `--config` in `[tools.sqlfluff] args` replaces togi's
+generated config entirely, and these two settings no longer apply.
 
 ## `[tools]` and `[tools.<name>]`
 

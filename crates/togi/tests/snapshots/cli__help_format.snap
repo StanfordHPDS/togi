@@ -4,7 +4,7 @@ expression: "help_output(& [\"format\", \"--help\"])"
 ---
 Format project files in place (R, Python, Quarto, SQL, Markdown)
 
-Discovers files from the given paths (or the whole project when none are given), routes each to its formatter behind one interface, and rewrites them in place. Pass --check to report what would change without touching anything (exit 1 when formatting is needed). Respects .gitignore, the [format] config, and any per-tool config the project already has (air.toml, ruff.toml, .sqlfluff).
+Discovers files from the given paths (or the whole project when none are given), routes each to its formatter behind one interface, and rewrites them in place. Pass --check to report what would change without touching anything (exit 1 when formatting is needed). Respects .gitignore, the `[format]` config, and any per-tool config the project already has (air.toml, ruff.toml, .sqlfluff).
 
 Usage: togi format [OPTIONS] [PATHS]...
 

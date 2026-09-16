@@ -37,10 +37,11 @@
 //! [`ToolCtx`] provider, prepends the managed air/ruff directories to the
 //! child's `PATH`, and — only when no panache config exists — passes
 //! `--config` pointing at a generated default that enables the `air`/`ruff`
-//! presets. A project (or user) with its own panache config keeps full
-//! control and still gets the managed binaries via `PATH`. panache's R
-//! *linter* preset is jarl, which togi does not manage, so R chunks are
-//! format-checked but not chunk-linted.
+//! presets and turns off the `missing-chunk-labels` lint. A project (or
+//! user) with its own panache config keeps full control and still gets the
+//! managed binaries via `PATH`. panache's R *linter* preset is jarl, which
+//! togi does not manage, so R chunks are format-checked but not
+//! chunk-linted.
 //!
 //! `[tools.panache] args` from `togi.toml` are appended after the built-in
 //! flags, before the file list.
@@ -57,9 +58,9 @@ use crate::adapters::{
 use crate::term::HintExt;
 
 /// The default panache config togi supplies when neither the project nor
-/// the user has one: it opts the managed tools in for embedded chunks and
+/// the user has one: it opts the managed tools in for embedded chunks,
 /// wraps prose one sentence per line (overriding panache's `reflow`
-/// default).
+/// default), and turns off the lint for unlabeled executable code chunks.
 const DEFAULT_CONFIG: &str = "\
 [formatters]
 r = \"air\"
@@ -70,6 +71,9 @@ python = \"ruff\"
 
 [format]
 wrap = \"sentence\"
+
+[lint.rules]
+missing-chunk-labels = false
 ";
 
 /// Formats and lints Quarto/R Markdown/Markdown files via panache.
@@ -721,6 +725,26 @@ mod tests {
         assert_eq!(value["linters"]["python"].as_str(), Some("ruff"));
         // togi's default prose wrapping is one sentence per line, overriding
         // panache's own `reflow` default.
+        assert_eq!(value["format"]["wrap"].as_str(), Some("sentence"));
+    }
+
+    #[test]
+    fn default_config_disables_missing_chunk_labels_lint() {
+        let value: toml::Table = DEFAULT_CONFIG.parse().expect("default config parses");
+        let rule = value
+            .get("lint")
+            .and_then(|lint| lint.get("rules"))
+            .and_then(|rules| rules.get("missing-chunk-labels"))
+            .and_then(toml::Value::as_bool);
+        assert_eq!(
+            rule,
+            Some(false),
+            "unlabeled executable chunks are not reported by default"
+        );
+        // Turning the rule off keeps the rest of the default config intact.
+        assert_eq!(value["formatters"]["r"].as_str(), Some("air"));
+        assert_eq!(value["formatters"]["python"].as_str(), Some("ruff"));
+        assert_eq!(value["linters"]["python"].as_str(), Some("ruff"));
         assert_eq!(value["format"]["wrap"].as_str(), Some("sentence"));
     }
 

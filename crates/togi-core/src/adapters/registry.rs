@@ -33,7 +33,10 @@ impl AdapterRegistry {
         let panache: Arc<dyn Adapter> = Arc::new(crate::adapters::PanacheAdapter::new());
         registry.register(Language::Quarto, Arc::clone(&panache));
         registry.register(Language::Markdown, panache);
-        registry.register(Language::Sql, Arc::new(crate::adapters::SqlFluffAdapter));
+        registry.register(
+            Language::Sql,
+            Arc::new(crate::adapters::SqlFluffAdapter::new()),
+        );
         registry
     }
 

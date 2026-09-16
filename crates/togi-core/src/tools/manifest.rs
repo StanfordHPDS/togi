@@ -29,7 +29,7 @@ impl Manifest {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|elapsed| elapsed.as_secs())
-            .unwrap_or(0); // a pre-1970 clock only mis-stamps the timestamp
+            .unwrap_or(0); // a pre-1970 clock only stamps the wrong timestamp
         Manifest {
             version,
             source_url,

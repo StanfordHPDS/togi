@@ -77,7 +77,7 @@ pub struct ToolCtx<'a> {
     /// Verbosity for adapters that want to expose extra detail at `-v`.
     /// Carried on the shared ctx so growing such output never changes the
     /// trait signatures; adapters read it to log their tool invocations
-    /// through [`log_command`].
+    /// through `log_command`.
     pub verbose: bool,
 }
 

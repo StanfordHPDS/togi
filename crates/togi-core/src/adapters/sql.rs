@@ -466,24 +466,43 @@ fn write_default_config() -> anyhow::Result<tempfile::NamedTempFile> {
 fn project_has_sqlfluff_config(files: &[PathBuf], env: &ConfigEnv) -> bool {
     let home = env.home.as_deref();
     let cwd = env.cwd.as_deref();
-    let root = cwd.map(|dir| dir_search_dirs(dir, home, cwd));
+    let mut targets: HashSet<PathBuf> = parent_dirs(files, cwd).into_iter().collect();
+    targets.extend(cwd.map(Path::to_path_buf));
+    let mut seen = HashSet::new();
+    targets
+        .iter()
+        .flat_map(|dir| dir_search_dirs(dir, home, cwd))
+        .any(|dir| seen.insert(dir.clone()) && dir_has_sqlfluff_config(&dir))
+}
+
+/// The unique, normalized and absolutized parent directory of each file
+/// in `files`, in first-seen order. Several files can share a directory
+/// (including after normalization, e.g. `a/../b` and `b`), so each
+/// directory's search chain only needs to be built once.
+fn parent_dirs(files: &[PathBuf], cwd: Option<&Path>) -> Vec<PathBuf> {
     let mut seen = HashSet::new();
     files
         .iter()
-        .map(|file| file_search_dirs(file, home, cwd))
-        .chain(root)
-        .flatten()
-        .any(|dir| seen.insert(dir.clone()) && dir_has_sqlfluff_config(&dir))
+        .map(|file| file_dir(file, cwd))
+        .filter(|dir| seen.insert(dir.clone()))
+        .collect()
+}
+
+/// `file`, normalized and absolutized against `cwd` as sqlfluff would,
+/// then its parent directory.
+fn file_dir(file: &Path, cwd: Option<&Path>) -> PathBuf {
+    let file = absolute(&normalize(file), cwd);
+    file.parent().unwrap_or(&file).to_path_buf()
 }
 
 /// The directories sqlfluff searches for project config for `file`,
 /// given the home and working directories. A relative `file` is resolved
-/// against `cwd`.
+/// against `cwd`. Production code batches this per unique directory (see
+/// [`parent_dirs`]); this per-file form exists for tests to check that
+/// batching against the same set of directories.
+#[cfg(test)]
 fn file_search_dirs(file: &Path, home: Option<&Path>, cwd: Option<&Path>) -> Vec<PathBuf> {
-    // sqlfluff normalizes each input path before searching for its config.
-    let file = absolute(&normalize(file), cwd);
-    let dir = file.parent().unwrap_or(&file);
-    dir_search_dirs(dir, home, cwd)
+    dir_search_dirs(&file_dir(file, cwd), home, cwd)
 }
 
 /// The directories sqlfluff searches for project config for a target
@@ -1200,6 +1219,50 @@ mod tests {
             dir_search_dirs(Path::new("a/b"), Some(Path::new("/x/y")), None),
             Vec::<PathBuf>::new()
         );
+    }
+
+    #[test]
+    fn parent_dirs_dedupes_files_that_normalize_to_the_same_directory() {
+        let cwd = Path::new("/home/u/p");
+        let files = paths(&[
+            "a/q1.sql",
+            "a/q2.sql",
+            "sub/../a/q3.sql",
+            "b/q4.sql",
+            "/home/u/p/a/q5.sql",
+        ]);
+        let dirs = parent_dirs(&files, Some(cwd));
+        assert_eq!(
+            dirs,
+            paths(&["/home/u/p/a", "/home/u/p/b"]),
+            "each unique parent directory appears once, in first-seen order"
+        );
+    }
+
+    #[test]
+    fn parent_dirs_yield_the_same_search_dirs_as_the_per_file_computation() {
+        let home = Some(Path::new("/home/u"));
+        let cwd = Some(Path::new("/home/u/p"));
+        let files = paths(&[
+            "a/q1.sql",
+            "a/q2.sql",
+            "sub/../a/q3.sql",
+            "b/q4.sql",
+            "/home/u/p/a/q5.sql",
+            "/srv/other/q6.sql",
+        ]);
+
+        let per_file: HashSet<PathBuf> = files
+            .iter()
+            .flat_map(|file| file_search_dirs(file, home, cwd))
+            .collect();
+
+        let deduped: HashSet<PathBuf> = parent_dirs(&files, cwd)
+            .iter()
+            .flat_map(|dir| dir_search_dirs(dir, home, cwd))
+            .collect();
+
+        assert_eq!(deduped, per_file);
     }
 
     #[cfg(windows)]

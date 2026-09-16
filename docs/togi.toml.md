@@ -87,8 +87,13 @@ because togi skips hidden files and directories.
 
 For Quarto and Markdown, togi wraps prose one sentence per line by default
 (panache's `wrap = "sentence"`), rather than reflowing paragraphs to a fixed
-width. This applies only when the project has no panache config of its own; a
-`.panache.toml` (or `panache.toml`) in the project takes full control.
+width. togi's default also turns off panache's `missing-chunk-labels` lint,
+which otherwise flags executable code chunks without a `#| label:`. Both
+apply only when neither the project nor the user has a panache config of
+their own. A project `.panache.toml`, `panache.toml`, or
+`.config/panache.toml` found while walking up from the input files, or a
+user-level config at `~/.config/panache/config.toml` (or
+`$XDG_CONFIG_HOME/panache/config.toml`), takes full control.
 
 ## `[sql]`
 

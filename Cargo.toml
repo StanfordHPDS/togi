@@ -3,14 +3,14 @@ resolver = "3"
 members = ["crates/togi-core", "crates/togi"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/StanfordHPDS/togi"
 homepage = "https://github.com/StanfordHPDS/togi"
 
 [workspace.dependencies]
-togi-core = { path = "crates/togi-core", version = "0.1.0" }
+togi-core = { path = "crates/togi-core", version = "0.1.1" }
 
 anstyle = "1.0.14"
 anyhow = "1"

@@ -339,7 +339,7 @@ exit 0
 "#;
 
     /// sqlfluff protocol: `lint --format json [--rules R] [--dialect D]
-    /// <files>` (JSON reports, exit 1 on findings) and `format`/`fix`
+    /// [--config P] <files>` (JSON reports, exit 1 on findings) and `format`/`fix`
     /// rewriting in place.
     const SQLFLUFF_SHIM: &str = r#"#!/bin/sh
 sub="$1"; shift
@@ -347,7 +347,7 @@ skip=0; files=""
 for a in "$@"; do
   if [ $skip -eq 1 ]; then skip=0; continue; fi
   case "$a" in
-    --format|--rules|--dialect) skip=1 ;;
+    --format|--rules|--dialect|--config) skip=1 ;;
     --*) ;;
     *) files="$files $a" ;;
   esac

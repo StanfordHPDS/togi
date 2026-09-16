@@ -101,6 +101,20 @@ user-level config at `~/.config/panache/config.toml` (or
 |---|---|---|---|
 | `dialect` | string | `"bigquery"` | SQL dialect passed to sqlfluff. Only applied when the project has not configured sqlfluff itself (a `.sqlfluff` file wins). |
 
+When the project has no sqlfluff config of its own, togi also applies two
+sqlfluff settings alongside the dialect: `large_file_skip_byte_limit = 0`, so
+large SQL files are linted rather than skipped, and
+`unquoted_identifiers_policy = none` for the `capitalisation.identifiers`
+rule, so identifier case is left as written. A project `.sqlfluff` file, or a
+sqlfluff section in `setup.cfg`, `tox.ini`, `pep8.ini`, or `pyproject.toml`,
+found while walking up from the input files to the repository root, takes
+full control.
+
+togi passes these two settings to sqlfluff as a generated `--config` file.
+sqlfluff honors only the last `--config` it receives and does not merge
+config files, so a `--config` in `[tools.sqlfluff] args` replaces togi's
+generated config entirely, and these two settings no longer apply.
+
 ## `[tools]` and `[tools.<name>]`
 
 Version pins and passthrough arguments for the managed tools (`air`, `ruff`,

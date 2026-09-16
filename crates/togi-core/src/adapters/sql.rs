@@ -7,10 +7,15 @@
 //! changes by comparing file contents before and after the run instead of
 //! parsing sqlfluff's human-oriented output.
 //!
-//! The configured `[sql] dialect` is passed as `--dialect` only when the
-//! project has no sqlfluff configuration of its own; when it does,
-//! sqlfluff's own config discovery wins. `[tools.sqlfluff] args` from
-//! togi.toml are appended to every invocation as the escape hatch.
+//! When the project has no sqlfluff configuration of its own, togi
+//! supplies its defaults: the configured `[sql] dialect` as `--dialect`,
+//! and a generated config file (see [`DEFAULT_CONFIG`]) as `--config`,
+//! which lints files of any size and leaves unquoted identifier case as
+//! written. Both are gated on the same check because sqlfluff layers a
+//! `--config` file over the config it discovers, so passing it alongside
+//! a project's own config would override the project; when the project
+//! configures sqlfluff, its config alone applies. `[tools.sqlfluff] args`
+//! from togi.toml are appended to every invocation as the escape hatch.
 
 use std::ffi::OsString;
 use std::fs;
@@ -46,6 +51,18 @@ const PARSE_ERROR_CODES: [&str; 2] = ["PRS", "TMP"];
 /// The shared what-to-do-next for sqlfluff usage/config failures.
 const CONFIG_HINT: &str = "check `[sql] dialect` and `[tools.sqlfluff] args` in togi.toml \
                            (or the project's own sqlfluff config), then rerun";
+
+/// sqlfluff settings togi applies when the project has no sqlfluff
+/// configuration of its own.
+const DEFAULT_CONFIG: &str = "\
+[sqlfluff]
+# Lint files of any size instead of skipping large ones.
+large_file_skip_byte_limit = 0
+
+[sqlfluff:rules:capitalisation.identifiers]
+# Leave the case of unquoted identifiers as written.
+unquoted_identifiers_policy = none
+";
 
 impl crate::adapters::Adapter for SqlFluffAdapter {
     fn name(&self) -> &'static str {
@@ -152,7 +169,19 @@ fn check_format(files: &[PathBuf], ctx: &ToolCtx) -> anyhow::Result<FormatOutcom
 /// batch.
 fn run(subcommand: &[&str], files: &[PathBuf], ctx: &ToolCtx) -> anyhow::Result<Output> {
     let binary = ctx.tool_path(TOOL)?;
-    let args = build_args(subcommand, files, ctx.config);
+    // Held until the child exits so the generated config file survives
+    // the run.
+    let default_config = if default_config_needed(files) {
+        Some(write_default_config()?)
+    } else {
+        None
+    };
+    let args = build_args(
+        subcommand,
+        files,
+        ctx.config,
+        default_config.as_ref().map(|f| f.path()),
+    );
     crate::adapters::log_command(ctx, &binary, &args);
     let mut cmd = Command::new(&binary);
     cmd.args(&args);
@@ -189,23 +218,56 @@ fn read_for_change_detection(file: &Path) -> anyhow::Result<Vec<u8>> {
         .hint("check that the file exists and is readable, or add it to `[format] exclude` in togi.toml")
 }
 
-/// The full sqlfluff command line for one invocation: subcommand, togi
-/// defaults, the `[tools.sqlfluff] args` escape hatch (last, so it can
-/// override the defaults), then the files.
-fn build_args(subcommand: &[&str], files: &[PathBuf], config: &Config) -> Vec<OsString> {
+/// The full sqlfluff command line for one invocation: subcommand, then
+/// togi's defaults, then the `[tools.sqlfluff] args` escape hatch (after
+/// the defaults, so it can override them), then the files.
+///
+/// `default_config` is the path of the generated [`DEFAULT_CONFIG`] file,
+/// present only when [`default_config_needed`] says togi should supply
+/// its defaults. Its presence gates both `--dialect` and `--config`, so
+/// the two defaults are always applied or omitted together.
+fn build_args(
+    subcommand: &[&str],
+    files: &[PathBuf],
+    config: &Config,
+    default_config: Option<&Path>,
+) -> Vec<OsString> {
     let mut args: Vec<OsString> = subcommand.iter().map(OsString::from).collect();
     args.push("--disable-progress-bar".into());
-    // Only supply the configured dialect when the project has not
-    // configured sqlfluff itself; project config passthrough wins.
-    if !project_has_sqlfluff_config(files) {
+    if let Some(path) = default_config {
         args.push("--dialect".into());
         args.push(config.sql.dialect.as_str().into());
+        args.push("--config".into());
+        args.push(path.as_os_str().to_os_string());
     }
     if let Some(extra) = config.tools.args.get(TOOL) {
         args.extend(extra.iter().map(OsString::from));
     }
     args.extend(files.iter().map(|f| f.as_os_str().to_os_string()));
     args
+}
+
+/// Whether togi should supply its defaults, the dialect and
+/// [`DEFAULT_CONFIG`]: only when the project has no sqlfluff
+/// configuration, since sqlfluff layers `--config` over the project's
+/// discovered config and would override it.
+fn default_config_needed(files: &[PathBuf]) -> bool {
+    !project_has_sqlfluff_config(files)
+}
+
+/// Write [`DEFAULT_CONFIG`] to a temp file that lives as long as the
+/// returned handle.
+fn write_default_config() -> anyhow::Result<tempfile::NamedTempFile> {
+    let file = tempfile::Builder::new()
+        .prefix("togi-sqlfluff-")
+        .suffix(".cfg")
+        .tempfile()
+        .context("could not create a temporary sqlfluff config")
+        .hint("check that the system temp directory is writable")?;
+    fs::write(file.path(), DEFAULT_CONFIG)
+        .context("could not write the temporary sqlfluff config")
+        .hint("check that the system temp directory is writable")?;
+    Ok(file)
 }
 
 /// Whether any of `files` sits in a project that configures sqlfluff
@@ -468,11 +530,19 @@ mod tests {
         dir
     }
 
+    /// `build_args` gated the way `run` gates it: a generated config path
+    /// (any path will do here) only when the project needs togi's defaults.
+    fn gated_args(subcommand: &[&str], files: &[PathBuf], config: &Config) -> Vec<String> {
+        let placeholder = Path::new("togi-default.cfg");
+        let default_config = default_config_needed(files).then_some(placeholder);
+        strings(&build_args(subcommand, files, config, default_config))
+    }
+
     #[test]
     fn dialect_flag_present_without_project_sqlfluff_config() {
         let dir = project();
         let files = vec![dir.path().join("q.sql")];
-        let args = strings(&build_args(&["lint"], &files, &Config::default()));
+        let args = gated_args(&["lint"], &files, &Config::default());
         let dialect_at = args.iter().position(|a| a == "--dialect");
         let at = dialect_at.expect("no project config, so togi supplies the dialect");
         assert_eq!(args[at + 1], "bigquery", "{args:?}");
@@ -484,7 +554,7 @@ mod tests {
         let files = vec![dir.path().join("q.sql")];
         let mut config = Config::default();
         config.sql.dialect = "duckdb".to_string();
-        let args = strings(&build_args(&["lint"], &files, &config));
+        let args = gated_args(&["lint"], &files, &config);
         let at = args.iter().position(|a| a == "--dialect").expect("flag");
         assert_eq!(args[at + 1], "duckdb", "{args:?}");
     }
@@ -495,7 +565,7 @@ mod tests {
         fs::write(dir.path().join(".sqlfluff"), "[sqlfluff]\ndialect = ansi\n")
             .expect("write config");
         let files = vec![dir.path().join("q.sql")];
-        let args = strings(&build_args(&["lint"], &files, &Config::default()));
+        let args = gated_args(&["lint"], &files, &Config::default());
         assert!(
             !args.contains(&"--dialect".to_string()),
             "the project's own config wins: {args:?}"
@@ -517,14 +587,14 @@ mod tests {
             let files = vec![dir.path().join("q.sql")];
 
             fs::write(dir.path().join(name), without_section).expect("write");
-            let args = strings(&build_args(&["lint"], &files, &Config::default()));
+            let args = gated_args(&["lint"], &files, &Config::default());
             assert!(
                 args.contains(&"--dialect".to_string()),
                 "{name} without a sqlfluff section is not sqlfluff config: {args:?}"
             );
 
             fs::write(dir.path().join(name), with_section).expect("write");
-            let args = strings(&build_args(&["lint"], &files, &Config::default()));
+            let args = gated_args(&["lint"], &files, &Config::default());
             assert!(
                 !args.contains(&"--dialect".to_string()),
                 "{name} with a sqlfluff section is project config: {args:?}"
@@ -539,7 +609,7 @@ mod tests {
         let nested = dir.path().join("analysis/queries");
         fs::create_dir_all(&nested).expect("mkdirs");
         let files = vec![nested.join("q.sql")];
-        let args = strings(&build_args(&["lint"], &files, &Config::default()));
+        let args = gated_args(&["lint"], &files, &Config::default());
         assert!(!args.contains(&"--dialect".to_string()), "{args:?}");
     }
 
@@ -552,7 +622,7 @@ mod tests {
         let repo = outer.path().join("repo");
         fs::create_dir_all(repo.join(".git")).expect("git marker");
         let files = vec![repo.join("q.sql")];
-        let args = strings(&build_args(&["lint"], &files, &Config::default()));
+        let args = gated_args(&["lint"], &files, &Config::default());
         assert!(args.contains(&"--dialect".to_string()), "{args:?}");
     }
 
@@ -567,7 +637,7 @@ mod tests {
             vec!["--templater".to_string(), "raw".to_string()],
         );
 
-        let args = strings(&build_args(&["format"], &files, &config));
+        let args = gated_args(&["format"], &files, &config);
         let templater_at = args.iter().position(|a| a == "--templater").expect("flag");
         let dialect_at = args.iter().position(|a| a == "--dialect").expect("flag");
         let file_at = args
@@ -583,6 +653,134 @@ mod tests {
             args.contains(&"--disable-progress-bar".to_string()),
             "{args:?}"
         );
+    }
+
+    // ---- generated default config ------------------------------------
+
+    /// The `key = value` lines of `text` under the INI section `section`.
+    fn section_lines<'a>(text: &'a str, section: &str) -> Vec<&'a str> {
+        let header = format!("[{section}]");
+        let mut current: Option<&str> = None;
+        let mut lines = Vec::new();
+        for line in text.lines().map(str::trim) {
+            if line.starts_with('[') && line.ends_with(']') {
+                current = Some(line);
+            } else if current == Some(header.as_str()) && !line.is_empty() {
+                lines.push(line);
+            }
+        }
+        lines
+    }
+
+    #[test]
+    fn default_config_sets_the_intended_options_in_their_sections() {
+        let core = section_lines(DEFAULT_CONFIG, "sqlfluff");
+        assert!(
+            core.contains(&"large_file_skip_byte_limit = 0"),
+            "large files are linted, not skipped: {DEFAULT_CONFIG:?}"
+        );
+        let identifiers =
+            section_lines(DEFAULT_CONFIG, "sqlfluff:rules:capitalisation.identifiers");
+        assert!(
+            identifiers.contains(&"unquoted_identifiers_policy = none"),
+            "identifier capitalisation is left alone: {DEFAULT_CONFIG:?}"
+        );
+        assert!(
+            !core.contains(&"unquoted_identifiers_policy = none"),
+            "the policy belongs to the rule section, not the core one: {DEFAULT_CONFIG:?}"
+        );
+    }
+
+    #[test]
+    fn default_config_path_is_passed_after_dialect_and_before_escape_hatch_and_files() {
+        let dir = project();
+        let file = dir.path().join("q.sql");
+        let files = vec![file.clone()];
+        let mut config = Config::default();
+        config.tools.args.insert(
+            TOOL.to_string(),
+            vec!["--templater".to_string(), "raw".to_string()],
+        );
+        let generated = dir.path().join("generated.cfg");
+
+        let args = strings(&build_args(
+            &["lint"],
+            &files,
+            &config,
+            Some(generated.as_path()),
+        ));
+        let config_at = args
+            .iter()
+            .position(|a| a == "--config")
+            .unwrap_or_else(|| panic!("a generated config is passed: {args:?}"));
+        assert_eq!(args[config_at + 1], generated.to_string_lossy(), "{args:?}");
+        let dialect_at = args.iter().position(|a| a == "--dialect").expect("flag");
+        let templater_at = args.iter().position(|a| a == "--templater").expect("flag");
+        let file_at = args
+            .iter()
+            .position(|a| *a == file.to_string_lossy())
+            .expect("file");
+        assert!(
+            dialect_at < config_at && config_at < templater_at && templater_at < file_at,
+            "dialect, then generated config, then escape hatch, then files: {args:?}"
+        );
+    }
+
+    #[test]
+    fn neither_default_is_passed_without_a_generated_config() {
+        let dir = project();
+        let files = vec![dir.path().join("q.sql")];
+        let args = strings(&build_args(&["lint"], &files, &Config::default(), None));
+        assert!(!args.contains(&"--config".to_string()), "{args:?}");
+        assert!(!args.contains(&"--dialect".to_string()), "{args:?}");
+    }
+
+    #[test]
+    fn written_default_config_holds_exactly_the_default_settings() {
+        let file = write_default_config().expect("temp config");
+        let written = fs::read_to_string(file.path()).expect("read temp config");
+        assert_eq!(written, DEFAULT_CONFIG);
+    }
+
+    #[test]
+    fn default_config_is_needed_only_without_project_sqlfluff_config() {
+        let bare = project();
+        let with_dot_sqlfluff = project();
+        fs::write(with_dot_sqlfluff.path().join(".sqlfluff"), "[sqlfluff]\n")
+            .expect("write config");
+        let with_pyproject = project();
+        fs::write(
+            with_pyproject.path().join("pyproject.toml"),
+            "[tool.sqlfluff.core]\ndialect = \"ansi\"\n",
+        )
+        .expect("write config");
+
+        for (dir, needed) in [
+            (&bare, true),
+            (&with_dot_sqlfluff, false),
+            (&with_pyproject, false),
+        ] {
+            let files = vec![dir.path().join("q.sql")];
+            assert_eq!(
+                default_config_needed(&files),
+                needed,
+                "generated config needed in {}",
+                dir.path().display()
+            );
+            let args = gated_args(&["lint"], &files, &Config::default());
+            assert_eq!(
+                args.contains(&"--dialect".to_string()),
+                needed,
+                "dialect passed in {}: {args:?}",
+                dir.path().display()
+            );
+            assert_eq!(
+                args.contains(&"--config".to_string()),
+                needed,
+                "generated config passed in {}: {args:?}",
+                dir.path().display()
+            );
+        }
     }
 
     // ---- adapter behavior against a scripted tool --------------------
@@ -605,6 +803,122 @@ mod tests {
     ) -> ToolCtx<'a> {
         *provider = Some(FakeToolPaths::with_tool(TOOL, &script.to_string_lossy()));
         ToolCtx::new(provider.as_ref().expect("just set"), config, false)
+    }
+
+    /// A fake sqlfluff that, while it runs, records its arguments, whether
+    /// the path after `--config` exists, and that file's contents, then
+    /// reports no findings.
+    #[cfg(unix)]
+    fn recording_sqlfluff(dir: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        let args_record = dir.join("args.txt");
+        let exists_record = dir.join("config-exists.txt");
+        let contents_record = dir.join("config-contents.txt");
+        let script = fake_sqlfluff(
+            dir,
+            &format!(
+                r#"printf '%s\n' "$@" > "{args}"
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--config" ]; then
+    if [ -f "$arg" ]; then
+      echo yes > "{exists}"
+      cat "$arg" > "{contents}"
+    else
+      echo no > "{exists}"
+    fi
+  fi
+  prev="$arg"
+done
+echo '[]'
+exit 0"#,
+                args = args_record.display(),
+                exists = exists_record.display(),
+                contents = contents_record.display()
+            ),
+        );
+        (script, args_record, exists_record, contents_record)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runs_pass_a_live_generated_config_without_project_sqlfluff_config() {
+        let dir = project();
+        let sql = dir.path().join("q.sql");
+        fs::write(&sql, "select 1\n").expect("write");
+        let (script, args_record, exists_record, contents_record) = recording_sqlfluff(dir.path());
+
+        let mut provider = None;
+        let config = Config::default();
+        let ctx = ctx_with_script(&script, &mut provider, &config);
+        let diagnostics = SqlFluffAdapter
+            .lint(std::slice::from_ref(&sql), false, &ctx)
+            .expect("lint");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let args = fs::read_to_string(&args_record).expect("script ran");
+        let args: Vec<&str> = args.lines().collect();
+        assert!(args.contains(&"--config"), "{args:?}");
+        assert!(args.contains(&"--dialect"), "{args:?}");
+        let exists = fs::read_to_string(&exists_record).expect("config flag seen");
+        assert_eq!(
+            exists.trim(),
+            "yes",
+            "the generated config exists during the run"
+        );
+        let contents = fs::read_to_string(&contents_record).expect("config copied");
+        assert_eq!(contents, DEFAULT_CONFIG);
+        assert!(contents.contains("unquoted_identifiers_policy = none"));
+        assert!(contents.contains("large_file_skip_byte_limit = 0"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_mode_runs_pass_a_live_generated_config_too() {
+        let dir = project();
+        let sql = dir.path().join("q.sql");
+        fs::write(&sql, "select 1\n").expect("write");
+        let (script, _, exists_record, contents_record) = recording_sqlfluff(dir.path());
+
+        let mut provider = None;
+        let config = Config::default();
+        let ctx = ctx_with_script(&script, &mut provider, &config);
+        let outcome = SqlFluffAdapter
+            .format(std::slice::from_ref(&sql), true, &ctx)
+            .expect("format --check");
+        assert!(outcome.changed.is_empty(), "{:?}", outcome.changed);
+
+        let exists = fs::read_to_string(&exists_record).expect("config flag seen");
+        assert_eq!(
+            exists.trim(),
+            "yes",
+            "the generated config exists during the run"
+        );
+        let contents = fs::read_to_string(&contents_record).expect("config copied");
+        assert_eq!(contents, DEFAULT_CONFIG);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runs_pass_no_togi_defaults_with_project_sqlfluff_config() {
+        let dir = project();
+        fs::write(dir.path().join(".sqlfluff"), "[sqlfluff]\ndialect = ansi\n")
+            .expect("write config");
+        let sql = dir.path().join("q.sql");
+        fs::write(&sql, "select 1\n").expect("write");
+        let (script, args_record, exists_record, _) = recording_sqlfluff(dir.path());
+
+        let mut provider = None;
+        let config = Config::default();
+        let ctx = ctx_with_script(&script, &mut provider, &config);
+        SqlFluffAdapter
+            .lint(std::slice::from_ref(&sql), false, &ctx)
+            .expect("lint");
+
+        let args = fs::read_to_string(&args_record).expect("script ran");
+        let args: Vec<&str> = args.lines().collect();
+        assert!(!args.contains(&"--config"), "{args:?}");
+        assert!(!args.contains(&"--dialect"), "{args:?}");
+        assert!(!exists_record.exists(), "no config path was passed");
     }
 
     #[cfg(unix)]

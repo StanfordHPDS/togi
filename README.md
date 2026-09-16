@@ -121,7 +121,7 @@ hidden paths and the package-manager directories `renv/` and `rv/`, wraps
 Quarto/Markdown prose one sentence per line, and turns off panache's
 `missing-chunk-labels` lint (an existing panache config, project or user,
 replaces these last two; see `docs/togi.toml.md`). For SQL, it lints large
-files and leaves identifier case alone unless the project has its own
+files and leaves identifier case alone unless the project or user has
 sqlfluff config. To change what it covers, create a `togi.toml` at the
 project root; it overrides only the keys it sets:
 

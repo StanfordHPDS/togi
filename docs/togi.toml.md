@@ -85,6 +85,13 @@ files (like `renv/activate.R`) that no formatter should touch. Your `exclude`
 adds to these built-ins; it does not replace them. uv's `.venv/` needs no entry
 because togi skips hidden files and directories.
 
+togi also skips rendered Markdown: an `X.md` that sits beside an `X.qmd` or
+`X.Rmd` of the same name is that document's generated output, so neither
+`togi format` nor `togi lint` touches it. The source counts even when
+`.gitignore` or `exclude` hides it, and the extensions match in any letter
+case (`README.RMD`, `README.MD`). Naming the file explicitly
+(`togi format README.md`) still processes it.
+
 For Quarto and Markdown, togi wraps prose one sentence per line by default
 (panache's `wrap = "sentence"`), rather than reflowing paragraphs to a fixed
 width. togi's default also turns off panache's `missing-chunk-labels` lint,

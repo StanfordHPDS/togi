@@ -117,7 +117,9 @@ failed, `2` usage error.
 ## Configuration
 
 togi needs no configuration. Out of the box it honors your `.gitignore`, skips
-hidden paths and the package-manager directories `renv/` and `rv/`, wraps
+hidden paths, the package-manager directories `renv/` and `rv/`, and Markdown
+rendered beside a `.qmd`/`.Rmd` source of the same name (`README.md` next to
+`README.qmd`; naming the file explicitly still processes it), wraps
 Quarto/Markdown prose one sentence per line, and turns off panache's
 `missing-chunk-labels` lint (an existing panache config, project or user,
 replaces these last two; see `docs/togi.toml.md`). For SQL, it lints large

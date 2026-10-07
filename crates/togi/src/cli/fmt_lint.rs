@@ -40,9 +40,10 @@ pub fn project_root(cwd: &Path, explicit_config: bool, project_config: Option<&P
 /// `root` when empty), respecting `.gitignore` plus togi's built-in
 /// package-manager excludes ([`fsx::DEFAULT_EXCLUDES`]) and the `exclude`
 /// globs from `selection` (all anchored at `root`), then keep only the
-/// languages `selection` enables. Discovered paths come back relative to
-/// `cwd` when they sit beneath it, so tool output and summaries stay
-/// readable.
+/// languages `selection` enables. Markdown rendered beside a `.qmd` or
+/// `.Rmd` source of the same name is skipped unless it is named in `paths`.
+/// Discovered paths come back relative to `cwd` when they sit beneath it, so
+/// tool output and summaries stay readable.
 ///
 /// `section` names the config table (`format` / `lint`) in warnings about
 /// unknown language names.

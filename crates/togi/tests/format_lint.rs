@@ -465,6 +465,36 @@ exit $status
             .stdout(predicate::str::contains("awful.R").not());
     }
 
+    /// Markdown rendered from a Quarto document beside it is generated
+    /// output, so a project-wide run leaves it alone.
+    #[test]
+    fn format_skips_markdown_rendered_beside_its_source() {
+        let sb = shimmed();
+        // Bring the fixture to a formatted state first, so the rendered
+        // file is the only thing that could fail the check.
+        sb.cmd(&["format"]).assert().success();
+        sb.write_file("README.qmd", "# Title\n\nA tidy paragraph.\n");
+        sb.write_file("README.md", "# Title\n\nA   rendered paragraph.\n");
+
+        sb.cmd(&["format", "--check"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("README.md").not());
+    }
+
+    /// Naming the rendered file on the command line still processes it.
+    #[test]
+    fn format_processes_rendered_markdown_named_explicitly() {
+        let sb = shimmed();
+        sb.write_file("README.qmd", "# Title\n\nA tidy paragraph.\n");
+        sb.write_file("README.md", "# Title\n\nA   rendered paragraph.\n");
+
+        sb.cmd(&["format", "--check", "README.md"])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::contains("would reformat: README.md"));
+    }
+
     #[test]
     fn a_crashing_tool_is_reported_without_hiding_the_other_results() {
         let sb = shimmed();
@@ -618,6 +648,26 @@ exit $status
                     .and(predicate::str::contains("query.sql").not())
                     .and(predicate::str::contains("report.qmd").not())
                     .and(predicate::str::contains("messy.R").not()),
+            )
+            .stderr(predicate::str::contains("found 2 issues"));
+    }
+
+    /// With markdown linting enabled, markdown rendered beside its source
+    /// is still skipped, while hand-written markdown is linted.
+    #[test]
+    fn lint_skips_markdown_rendered_beside_its_source() {
+        let sb = shimmed();
+        sb.write_project_config("[lint]\nlanguages = [\"quarto\", \"markdown\"]\n");
+        sb.write_file("README.qmd", "# Title\n\nA tidy paragraph.\n");
+        sb.write_file("README.md", "# Title\n\nA   rendered paragraph.\n");
+
+        sb.cmd(&["lint"])
+            .assert()
+            .code(1)
+            .stdout(
+                predicate::str::contains("notes.md:3:7: extra-spaces paragraph has extra spaces")
+                    .and(predicate::str::contains("report.qmd:3:7: extra-spaces"))
+                    .and(predicate::str::contains("README.md").not()),
             )
             .stderr(predicate::str::contains("found 2 issues"));
     }

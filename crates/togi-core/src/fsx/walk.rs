@@ -1,6 +1,7 @@
 //! Gitignore-aware file walker.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
@@ -68,6 +69,14 @@ pub struct WalkOutcome {
 /// default behavior): naming a file on the command line is an intentional
 /// request to process that exact file.
 ///
+/// Rendered markdown is skipped as well: a walked `X.md` is dropped when a
+/// file named `X.qmd` or `X.Rmd` sits in the same directory, because that
+/// markdown is the source's generated output and is overwritten on the next
+/// render. Extensions are matched without regard to ASCII case; the stem
+/// must match exactly. The source is looked up on disk, so one hidden by
+/// `.gitignore` or `excludes` still counts. An explicit file target is
+/// exempt from this too, even when its directory is walked in the same call.
+///
 /// Exclude globs are rooted at `exclude_root` when given — the project
 /// root, so anchored patterns like `data/**` mean the same thing no matter
 /// which subdirectory is targeted. Without it they are rooted at each
@@ -80,6 +89,9 @@ pub fn walk(
 ) -> Result<WalkOutcome, FsxError> {
     let mut found = BTreeSet::new();
     let mut warnings = BTreeSet::new();
+    // Stems of the Quarto sources in each directory that holds walked
+    // markdown, so a directory is listed once however many `.md` files it has.
+    let mut source_stems: HashMap<PathBuf, HashSet<OsString>> = HashMap::new();
     for path in paths {
         if !path.exists() {
             return Err(FsxError::MissingPath { path: path.clone() });
@@ -113,9 +125,15 @@ pub fn walk(
         for entry in walker {
             match entry {
                 Ok(entry) => {
-                    if entry.file_type().is_some_and(|ft| ft.is_file()) {
-                        found.insert(entry.into_path());
+                    if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                        continue;
                     }
+                    // Depth 0 is the target itself: a file named explicitly
+                    // is always processed.
+                    if entry.depth() > 0 && is_rendered_markdown(entry.path(), &mut source_stems) {
+                        continue;
+                    }
+                    found.insert(entry.into_path());
                 }
                 // Per-entry errors (e.g. unreadable subdirectories) are not
                 // fatal — the roots were validated above — but they must not
@@ -155,6 +173,85 @@ fn build_exclude_overrides(root: &Path, excludes: &[String]) -> Result<Override,
         pattern: excludes.join(", "),
         source,
     })
+}
+
+/// Whether `path` is markdown rendered from a Quarto source beside it: a
+/// `.md` file whose directory also holds a `.qmd` or `.Rmd` file with the
+/// same stem. Extensions are compared without regard to ASCII case.
+///
+/// `source_stems` caches, per directory, the stems of the sources found
+/// there. The directory is listed rather than probed for fixed spellings so
+/// that any casing of the source extension is found on a case-sensitive
+/// filesystem. A directory or entry that cannot be read contributes no
+/// stems, which keeps the markdown file.
+fn is_rendered_markdown(
+    path: &Path,
+    source_stems: &mut HashMap<PathBuf, HashSet<OsString>>,
+) -> bool {
+    if !has_extension(path, &["md"]) {
+        return false;
+    }
+    let (Some(dir), Some(stem)) = (path.parent(), path.file_stem()) else {
+        return false;
+    };
+    if let Some(stems) = source_stems.get(dir) {
+        return stems.contains(stem);
+    }
+    let stems = quarto_source_stems(listing_dir(dir));
+    let rendered = stems.contains(stem);
+    source_stems.insert(dir.to_path_buf(), stems);
+    rendered
+}
+
+/// The directory to list for a file whose parent is `parent`. A bare file
+/// name such as `doc.md` has an empty parent, which names no directory on
+/// disk; it stands for the current directory.
+fn listing_dir(parent: &Path) -> &Path {
+    if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    }
+}
+
+/// Stems of the `.qmd` and `.Rmd` files directly inside `dir`; empty when
+/// the directory cannot be listed.
+///
+/// Each entry is judged by its file name and the file type the listing
+/// reports, so most entries cost no further filesystem call. Only a symlink
+/// named like a source is resolved, to count a link to a file and reject a
+/// dangling link or a link to a directory. An entry whose type cannot be
+/// read contributes no stem.
+fn quarto_source_stems(dir: &Path) -> HashSet<OsString> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return HashSet::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = Path::new(&name);
+            if !has_extension(name, &["qmd", "rmd"]) {
+                return None;
+            }
+            let file_type = entry.file_type().ok()?;
+            let is_source =
+                file_type.is_file() || (file_type.is_symlink() && entry.path().is_file());
+            if is_source {
+                name.file_stem().map(OsString::from)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Whether `path`'s extension is one of `extensions` (lowercase, no leading
+/// dot), compared without regard to ASCII case.
+fn has_extension(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| extensions.iter().any(|want| ext.eq_ignore_ascii_case(want)))
 }
 
 #[cfg(test)]
@@ -339,6 +436,278 @@ mod tests {
         let files = walk(&[root.to_path_buf()], &[], None).unwrap().files;
 
         assert_eq!(rel_names(&files, root), vec!["analysis.R"]);
+    }
+
+    /// Markdown rendered from a Quarto document beside it is generated
+    /// output: the source is walked, the output is not.
+    #[test]
+    fn walk_skips_markdown_rendered_from_a_sibling_qmd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "doc.qmd", "");
+        write(root, "doc.md", "");
+
+        let files = walk(&[root.to_path_buf()], &[], None).unwrap().files;
+
+        assert_eq!(rel_names(&files, root), vec!["doc.qmd"]);
+    }
+
+    #[test]
+    fn walk_skips_markdown_rendered_from_a_sibling_rmd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "doc.Rmd", "");
+        write(root, "doc.md", "");
+
+        let files = walk(&[root.to_path_buf()], &[], None).unwrap().files;
+
+        assert_eq!(rel_names(&files, root), vec!["doc.Rmd"]);
+    }
+
+    /// The source extension is matched without regard to ASCII case. Each
+    /// spelling gets its own directory so no two names differ only by case,
+    /// which keeps the fixture valid on case-insensitive filesystems.
+    #[test]
+    fn walk_matches_the_rendered_markdown_source_extension_case_insensitively() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for (dir, source) in [
+            ("a", "doc.QMD"),
+            ("b", "doc.Qmd"),
+            ("c", "doc.rmd"),
+            ("d", "doc.RMD"),
+        ] {
+            write(root, &format!("{dir}/{source}"), "");
+            write(root, &format!("{dir}/doc.md"), "");
+        }
+
+        let files = walk(&[root.to_path_buf()], &[], None).unwrap().files;
+
+        assert_eq!(
+            rel_names(&files, root),
+            vec!["a/doc.QMD", "b/doc.Qmd", "c/doc.rmd", "d/doc.RMD"]
+        );
+    }
+
+    /// A bare file name has an empty parent, which is listed as the current
+    /// directory; any other parent is listed as given.
+    #[test]
+    fn listing_dir_maps_an_empty_parent_to_the_current_directory() {
+        let bare = Path::new("doc.md").parent().unwrap();
+        assert_eq!(listing_dir(bare), Path::new("."));
+
+        let nested = Path::new("docs/doc.md").parent().unwrap();
+        assert_eq!(listing_dir(nested), Path::new("docs"));
+    }
+
+    /// The rendered file's own extension is matched without regard to ASCII
+    /// case as well.
+    #[test]
+    fn walk_skips_rendered_markdown_with_an_uppercase_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "doc.qmd", "");
+        write(root, "doc.MD", "");
+        write(root, "notes.MD", "");
+
+        let files = walk(&[root.to_path_buf()], &[], None).unwrap().files;
+
+        assert_eq!(rel_names(&files, root), vec!["doc.qmd", "notes.MD"]);
+    }
+
+    /// Only a file counts as a source: a directory that happens to be named
+    /// like one does not mark the markdown beside it as rendered.
+    #[test]
+    fn walk_keeps_markdown_beside_a_directory_named_like_a_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "doc.qmd/inner.R", "");
+        write(root, "doc.md", "");
+
+        let files = walk(&[root.to_path_buf()], &[], None).unwrap().files;
+
+        assert_eq!(rel_names(&files, root), vec!["doc.md", "doc.qmd/inner.R"]);
+    }
+
+    /// A source reached through a symlink is still a source.
+    #[cfg(unix)]
+    #[test]
+    fn walk_skips_markdown_rendered_from_a_symlinked_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "shared/original.qmd", "");
+        write(root, "docs/doc.md", "");
+        write(root, "docs/notes.md", "");
+        std::os::unix::fs::symlink(root.join("shared/original.qmd"), root.join("docs/doc.qmd"))
+            .unwrap();
+
+        let files = walk(&[root.join("docs")], &[], None).unwrap().files;
+
+        assert_eq!(rel_names(&files, root), vec!["docs/notes.md"]);
+    }
+
+    /// A symlink that points nowhere is not a source, so the markdown
+    /// beside it is kept.
+    #[cfg(unix)]
+    #[test]
+    fn walk_keeps_markdown_beside_a_dangling_symlink_named_like_a_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "doc.md", "");
+        std::os::unix::fs::symlink(root.join("missing.qmd"), root.join("doc.qmd")).unwrap();
+
+        let files = walk(&[root.to_path_buf()], &[], None).unwrap().files;
+
+        assert_eq!(rel_names(&files, root), vec!["doc.md"]);
+    }
+
+    /// A symlink to a directory is not a source either.
+    #[cfg(unix)]
+    #[test]
+    fn walk_keeps_markdown_beside_a_symlink_to_a_directory_named_like_a_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "docs/doc.md", "");
+        fs::create_dir_all(root.join("shared")).unwrap();
+        std::os::unix::fs::symlink(root.join("shared"), root.join("docs/doc.qmd")).unwrap();
+
+        let files = walk(&[root.join("docs")], &[], None).unwrap().files;
+
+        assert_eq!(rel_names(&files, root), vec!["docs/doc.md"]);
+    }
+
+    /// The stem is everything before the last dot, so a multi-dot source
+    /// pairs only with markdown carrying the same multi-dot stem.
+    #[test]
+    fn walk_skips_markdown_rendered_from_a_source_with_a_dotted_stem() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "doc.final.qmd", "");
+        write(root, "doc.final.md", "");
+        write(root, "doc.md", "");
+
+        let files = walk(&[root.to_path_buf()], &[], None).unwrap().files;
+
+        assert_eq!(rel_names(&files, root), vec!["doc.final.qmd", "doc.md"]);
+    }
+
+    #[test]
+    fn walk_keeps_markdown_without_a_sibling_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "notes.md", "");
+        write(root, "doc.qmd", "");
+        write(root, "analysis.R", "");
+
+        let files = walk(&[root.to_path_buf()], &[], None).unwrap().files;
+
+        assert_eq!(
+            rel_names(&files, root),
+            vec!["analysis.R", "doc.qmd", "notes.md"]
+        );
+    }
+
+    /// Only a source in the same directory marks markdown as rendered.
+    #[test]
+    fn walk_keeps_markdown_whose_source_is_in_another_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "doc.qmd", "");
+        write(root, "out/doc.md", "");
+        write(root, "src/doc.Rmd", "");
+
+        let files = walk(&[root.to_path_buf()], &[], None).unwrap().files;
+
+        assert_eq!(
+            rel_names(&files, root),
+            vec!["doc.qmd", "out/doc.md", "src/doc.Rmd"]
+        );
+    }
+
+    /// The sibling source is looked up on disk, not among the walked files:
+    /// a source hidden by `.gitignore` still marks its output as rendered.
+    #[test]
+    fn walk_skips_markdown_rendered_from_a_gitignored_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, ".gitignore", "*.qmd\n");
+        write(root, "doc.qmd", "");
+        write(root, "doc.md", "");
+        write(root, "notes.md", "");
+
+        let files = walk(&[root.to_path_buf()], &[], None).unwrap().files;
+
+        assert_eq!(rel_names(&files, root), vec!["notes.md"]);
+    }
+
+    /// A source dropped by an exclude glob still marks its output as
+    /// rendered, for the same reason as a gitignored one.
+    #[test]
+    fn walk_skips_markdown_rendered_from_an_excluded_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "doc.Rmd", "");
+        write(root, "doc.md", "");
+        write(root, "notes.md", "");
+
+        let excludes = ["*.Rmd".to_string()];
+        let files = walk(&[root.to_path_buf()], &excludes, None).unwrap().files;
+
+        assert_eq!(rel_names(&files, root), vec!["notes.md"]);
+    }
+
+    /// Naming a rendered markdown file on the command line is an intentional
+    /// request to process it, like any other explicit file target.
+    #[test]
+    fn walk_returns_an_explicit_markdown_target_beside_its_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "doc.qmd", "");
+        write(root, "doc.md", "");
+
+        let files = walk(&[root.join("doc.md")], &[], None).unwrap().files;
+
+        assert_eq!(rel_names(&files, root), vec!["doc.md"]);
+    }
+
+    /// An explicit target stays in the result even when the same run also
+    /// walks the directory that would otherwise skip it.
+    #[test]
+    fn walk_keeps_an_explicit_markdown_target_when_its_directory_is_also_walked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "doc.qmd", "");
+        write(root, "doc.md", "");
+        write(root, "other.qmd", "");
+        write(root, "other.md", "");
+
+        let files = walk(&[root.to_path_buf(), root.join("doc.md")], &[], None)
+            .unwrap()
+            .files;
+
+        assert_eq!(
+            rel_names(&files, root),
+            vec!["doc.md", "doc.qmd", "other.qmd"]
+        );
+    }
+
+    /// Only an exact stem match counts: markdown whose name merely starts
+    /// with the source's stem or full name is not that source's output.
+    #[test]
+    fn walk_keeps_markdown_whose_stem_only_resembles_a_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "doc.qmd", "");
+        write(root, "doc.qmd.md", "");
+        write(root, "doc.final.md", "");
+        write(root, "document.md", "");
+
+        let files = walk(&[root.to_path_buf()], &[], None).unwrap().files;
+
+        assert_eq!(
+            rel_names(&files, root),
+            vec!["doc.final.md", "doc.qmd", "doc.qmd.md", "document.md"]
+        );
     }
 
     /// A permission-denied subtree must not silently shrink the target set:

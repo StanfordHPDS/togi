@@ -9,11 +9,14 @@ Deletes the entire managed-tool cache and reports the space freed; tools are re-
 Usage: togi tools clean [OPTIONS]
 
 Options:
-  -v, --verbose
-          Show more detail (underlying commands, tool names)
+      --with-version <VERSION>
+          Run using an exact togi release for this invocation
 
   -y, --yes
           Delete without asking for confirmation
+
+  -v, --verbose
+          Show more detail (underlying commands, tool names)
 
   -q, --quiet
           Suppress all output except errors

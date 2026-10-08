@@ -15,6 +15,9 @@ Commands:
   help    Print this message or the help of the given subcommand(s)
 
 Options:
+      --with-version <VERSION>
+          Run using an exact togi release for this invocation
+
   -v, --verbose
           Show more detail (underlying commands, tool names)
 

@@ -9,6 +9,9 @@ The first line matches `togi --version`; the rest name the default version of ea
 Usage: togi version [OPTIONS]
 
 Options:
+      --with-version <VERSION>
+          Run using an exact togi release for this invocation
+
   -v, --verbose
           Show more detail (underlying commands, tool names)
 

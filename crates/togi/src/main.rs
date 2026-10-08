@@ -3,6 +3,7 @@
 //! Thin entry point: parse the CLI, dispatch, render top-level errors.
 
 mod cli;
+mod project_version;
 
 use std::process::ExitCode;
 
@@ -12,7 +13,16 @@ use togi_core::config;
 use togi_core::term::{self, HintExt};
 
 fn main() -> ExitCode {
-    match cli::run(cli::Cli::parse()) {
+    let (args, override_version) = match project_version::bootstrap(std::env::args_os().collect()) {
+        Ok(project_version::Bootstrap::Run {
+            args,
+            override_version,
+        }) => (args, override_version),
+        Err(err) => return render_error(err),
+    };
+    let mut cli = cli::Cli::parse_from(args);
+    cli.global.with_version = override_version;
+    match cli::run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => render_error(err),
     }

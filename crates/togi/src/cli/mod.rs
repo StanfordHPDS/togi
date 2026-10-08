@@ -4,8 +4,9 @@ mod completions;
 mod fmt_lint;
 mod format;
 mod lint;
+mod pin;
 mod tools;
-mod upgrade;
+pub(crate) mod upgrade;
 mod version;
 
 use std::path::PathBuf;
@@ -34,6 +35,10 @@ pub struct Cli {
 /// Flags accepted by every command.
 #[derive(Debug, Args)]
 pub struct GlobalArgs {
+    /// Run using an exact togi release for this invocation
+    #[arg(long, global = true, value_name = "VERSION")]
+    pub with_version: Option<String>,
+
     /// Show more detail (underlying commands, tool names)
     #[arg(short, long, global = true)]
     pub verbose: bool,
@@ -93,6 +98,10 @@ pub enum Command {
     /// running binary in place. Does nothing if you already have the latest
     /// version.
     Upgrade,
+    /// Pin this project to an exact togi release
+    Pin(pin::PinArgs),
+    /// Remove this project's togi version pin
+    Unpin,
 }
 
 /// Dispatch a parsed CLI invocation to its command module.
@@ -106,6 +115,8 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Completions(args) => completions::run(args),
         Command::Version => version::run(),
         Command::Upgrade => upgrade::run(&global),
+        Command::Pin(args) => pin::run(args, &global),
+        Command::Unpin => pin::unpin(),
     }
 }
 

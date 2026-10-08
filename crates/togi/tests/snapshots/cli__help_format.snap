@@ -16,6 +16,9 @@ Options:
       --check
           Report the files that would change without rewriting anything (exit 1 when formatting is needed)
 
+      --with-version <VERSION>
+          Run using an exact togi release for this invocation
+
   -v, --verbose
           Show more detail (underlying commands, tool names)
 

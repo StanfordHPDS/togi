@@ -1,0 +1,15 @@
+---
+source: crates/togi/tests/cli.rs
+expression: "help_output(& [\"unpin\", \"--help\"])"
+---
+Remove this project's togi version pin
+
+Usage: togi unpin [OPTIONS]
+
+Options:
+      --with-version <VERSION>  Run using an exact togi release for this invocation
+  -v, --verbose                 Show more detail (underlying commands, tool names)
+  -q, --quiet                   Suppress all output except errors
+      --no-color                Disable colored output
+      --config <PATH>           Use this config file instead of discovering togi.toml
+  -h, --help                    Print help

@@ -51,6 +51,24 @@ impl ToolCache {
         }
     }
 
+    /// Cache rooted at an already selected directory.
+    pub fn at_root(root: &Path) -> ToolCache {
+        ToolCache {
+            root: root.to_path_buf(),
+        }
+    }
+
+    /// Versioned togi runtimes under the platform data directory.
+    pub fn versions_from_env() -> anyhow::Result<ToolCache> {
+        match data_dir(std::env::var_os("TOGI_DATA_DIR")) {
+            Some(dir) => Ok(ToolCache::at_root(&dir.join("versions"))),
+            None => Err(anyhow::anyhow!(
+                "could not determine a data directory for togi versions"
+            ))
+            .hint("make sure your home directory is set (HOME on macOS/Linux, APPDATA on Windows)"),
+        }
+    }
+
     /// `<data_dir>/tools`: parent of every per-tool directory.
     pub fn root(&self) -> &Path {
         &self.root

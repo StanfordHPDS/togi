@@ -9,6 +9,9 @@ Prints each installed tool version from the cache (name, version, source, instal
 Usage: togi tools list [OPTIONS]
 
 Options:
+      --with-version <VERSION>
+          Run using an exact togi release for this invocation
+
   -v, --verbose
           Show more detail (underlying commands, tool names)
 

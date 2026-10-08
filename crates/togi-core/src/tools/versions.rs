@@ -38,6 +38,13 @@ mod tests {
 
     #[test]
     fn panache_defaults_to_the_safe_fix_release() {
-        assert_eq!(PANACHE, "3.14.0");
+        let parts: Vec<u64> = PANACHE
+            .split('.')
+            .map(|part| part.parse().expect("validated semver component"))
+            .collect();
+        assert!(
+            parts.as_slice() >= &[3, 12, 0],
+            "panache {PANACHE} predates opt-in unsafe Ruff fixes"
+        );
     }
 }

@@ -1,0 +1,3 @@
+misformatted.py:1:2: unformatted: File would be reformatted
+dir/notebook.ipynb:cell 1:4:1: unformatted: File would be reformatted
+2 files would be reformatted

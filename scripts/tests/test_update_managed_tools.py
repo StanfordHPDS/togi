@@ -1,11 +1,14 @@
 import copy
+import contextlib
 import importlib.util
+import io
 import json
 import pathlib
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -42,6 +45,38 @@ def snapshot(repo):
 
 
 class UpdateManagedToolsTests(unittest.TestCase):
+    def test_github_token_is_sent_only_to_the_github_api_without_redirecting(self):
+        updater = load_updater()
+        requests = []
+
+        def respond(request):
+            requests.append(request)
+            return io.BytesIO(b"{}")
+
+        with (
+            mock.patch.dict(updater.os.environ, {"GITHUB_TOKEN": "secret"}),
+            mock.patch.object(updater.urllib.request, "urlopen", side_effect=respond),
+        ):
+            updater._request_json("https://api.github.com/repos/owner/repo/releases")
+            updater._request_json("https://pypi.org/pypi/project/json")
+
+        self.assertEqual(requests[0].get_header("Authorization"), "Bearer secret")
+        self.assertIn("Authorization", requests[0].unredirected_hdrs)
+        self.assertIsNone(requests[1].get_header("Authorization"))
+
+    def test_release_validation_checks_the_committed_pins_not_moving_latest_versions(self):
+        updater = load_updater()
+        with tempfile.TemporaryDirectory() as directory:
+            repo = copy_repository(directory)
+            with mock.patch.object(updater, "_validate_upstream_version") as validate:
+                versions = updater.validate_pinned_versions(repo)
+
+        self.assertEqual(versions["air"], "0.10.0")
+        self.assertEqual(versions["ruff"], "0.14.0")
+        validate.assert_has_calls(
+            [mock.call(name, versions[name]) for name in updater.TOOLS]
+        )
+
     def test_latest_release_parsers_choose_stable_versions(self):
         updater = load_updater()
 
@@ -89,6 +124,12 @@ class UpdateManagedToolsTests(unittest.TestCase):
                 assets,
                 checksums.replace("1111111111111111", "not-a-checksum", 1),
             )
+        digest = "a" * 64
+        archive = "air-x86_64-apple-darwin.tar.gz"
+        updater.validate_single_checksum(archive, digest)
+        updater.validate_single_checksum(archive, f"{digest}  {archive}\n")
+        with self.assertRaisesRegex(updater.UpdateError, "different archive"):
+            updater.validate_single_checksum(archive, f"{digest}  another.tar.gz\n")
 
     def test_current_versions_are_a_no_op(self):
         updater = load_updater()
@@ -248,6 +289,31 @@ class UpdateManagedToolsTests(unittest.TestCase):
                 release_exists=False,
             )
 
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory, "github-output")
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = updater.main(
+                    [
+                        "plan-release",
+                        "--workspace-version",
+                        "1.2.4",
+                        "--latest-release",
+                        "v1.2.3",
+                        "--merge-sha",
+                        sha,
+                        "--existing-tag-sha",
+                        sha,
+                        "--release-missing",
+                        "--github-output",
+                        str(output),
+                    ]
+                )
+            self.assertEqual(result, 0)
+            self.assertEqual(
+                output.read_text(),
+                "tag=v1.2.4\ncreate_tag=false\ndispatch_release=true\n",
+            )
+
     def test_only_the_exact_merged_updater_pr_qualifies_for_release(self):
         updater = load_updater()
         sha = "a" * 40
@@ -271,6 +337,25 @@ class UpdateManagedToolsTests(unittest.TestCase):
                 candidate = copy.deepcopy(pull_request)
                 candidate.update(replacement)
                 self.assertFalse(updater.qualifies_for_release(candidate, sha))
+
+        with tempfile.TemporaryDirectory() as directory:
+            pull_requests = pathlib.Path(directory, "pulls.json")
+            output = pathlib.Path(directory, "github-output")
+            pull_requests.write_text(json.dumps([{"merged": False}, pull_request]))
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = updater.main(
+                    [
+                        "qualify-pr",
+                        "--pull-requests",
+                        str(pull_requests),
+                        "--merge-sha",
+                        sha,
+                        "--github-output",
+                        str(output),
+                    ]
+                )
+            self.assertEqual(result, 0)
+            self.assertEqual(output.read_text(), "eligible=true\n")
 
 
 if __name__ == "__main__":

@@ -37,6 +37,10 @@ fn tool_update_release_workflow() -> String {
     read(&[".github", "workflows", "release-managed-tools.yml"])
 }
 
+fn ci_workflow() -> String {
+    read(&[".github", "workflows", "ci.yml"])
+}
+
 fn workflow(yml: &str) -> serde_yaml::Value {
     serde_yaml::from_str(yml).expect("valid workflow YAML")
 }
@@ -163,7 +167,11 @@ fn managed_tool_updates_run_monthly_or_manually_with_narrow_permissions() {
     assert_permissions(discover, &[("contents", "read")]);
     assert_permissions(
         publish,
-        &[("contents", "write"), ("pull-requests", "write")],
+        &[
+            ("actions", "write"),
+            ("contents", "write"),
+            ("pull-requests", "write"),
+        ],
     );
     assert_eq!(field(publish, "needs").as_str(), Some("discover"));
     assert!(
@@ -178,9 +186,19 @@ fn managed_tool_updates_run_monthly_or_manually_with_narrow_permissions() {
         "monthly and manual runs must share one concurrency group"
     );
     assert!(
-        yml.contains("cargo test --features online-tests -- --ignored"),
+        yml.contains("cargo test --workspace --locked --features online-tests -- --ignored"),
         "the update PR must validate real managed-tool downloads"
     );
+    assert!(
+        yml.contains("path: ${{ runner.temp }}/managed-tool-update"),
+        "the downloaded patch must stay outside the checkout"
+    );
+    assert!(
+        yml.contains("gh workflow run ci.yml --ref automated/managed-tool-updates"),
+        "GITHUB_TOKEN-created PRs must explicitly dispatch CI for their commit"
+    );
+    let ci = workflow(&ci_workflow());
+    field(field(&ci, "on"), "workflow_dispatch");
 }
 
 #[test]
@@ -225,8 +243,26 @@ fn managed_tool_release_waits_for_successful_post_merge_ci() {
         yml.contains("scripts/update-managed-tools.py"),
         "the workflow must use the tested release decision logic"
     );
+    assert!(
+        yml.contains("validate-pins --repo ."),
+        "release must validate the committed pins rather than moving latest versions"
+    );
+    assert!(
+        yml.contains("cargo test --workspace --locked --features online-tests -- --ignored"),
+        "the exact merge commit must pass real managed-tool tests before release"
+    );
     assert!(yml.contains("gh workflow run release.yml"));
-    assert_permissions(&parsed, &[("actions", "write"), ("contents", "write")]);
+    assert_permissions(&parsed, &[("contents", "read")]);
+    let jobs = field(&parsed, "jobs").as_mapping().expect("jobs mapping");
+    let inspect = jobs
+        .get(serde_yaml::Value::String("inspect".to_string()))
+        .expect("read-only release inspection job");
+    let publish = jobs
+        .get(serde_yaml::Value::String("publish".to_string()))
+        .expect("release publishing job");
+    assert_permissions(inspect, &[("contents", "read"), ("pull-requests", "read")]);
+    assert_permissions(publish, &[("actions", "write"), ("contents", "write")]);
+    assert_eq!(field(publish, "needs").as_str(), Some("inspect"));
 }
 
 #[test]

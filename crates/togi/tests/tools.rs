@@ -215,18 +215,21 @@ fn update_reports_up_to_date_for_cached_tools_without_network() {
 fn update_installs_a_pinned_version_and_reports_the_transition() {
     let sb = Sandbox::new();
     sb.install_all_defaults();
-    sb.write_project_config("[tools]\nair = \"0.11.0\"\n");
+    let pinned = "9.9.9";
+    sb.write_project_config(&format!("[tools]\nair = \"{pinned}\"\n"));
 
-    // Serve air 0.11.0 for every platform tuple so the test passes on any
+    // Serve the pin for every platform tuple so the test passes on any
     // host. No checksum assets: the installer warns and proceeds.
-    let server = FixtureServer::serve(air_release_routes("0.11.0"));
+    let server = FixtureServer::serve(air_release_routes(pinned));
 
     sb.tools_cmd(&["update"], &server.base_url)
         .assert()
         .success()
         .stdout(
             predicate::str::contains("air")
-                .and(predicate::str::contains("0.10.0 -> 0.11.0"))
+                .and(predicate::str::contains(format!(
+                    "{AIR_DEFAULT} -> {pinned}"
+                )))
                 .and(predicate::str::contains("up to date")),
         );
 
@@ -235,7 +238,7 @@ fn update_installs_a_pinned_version_and_reports_the_transition() {
         sb.data_dir
             .join("tools")
             .join("air")
-            .join("0.11.0")
+            .join(pinned)
             .join("manifest.json")
             .is_file(),
         "pinned air version must be installed into the cache"

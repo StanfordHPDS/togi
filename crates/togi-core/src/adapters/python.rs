@@ -134,6 +134,11 @@ fn format_args(check: bool, extra: &[String], files: &[PathBuf]) -> Vec<OsString
     let mut args: Vec<OsString> = vec!["format".into(), no_cache()];
     if check {
         args.push("--check".into());
+        // Ruff 0.16 switched the default check output from one path per
+        // line to full source diffs. Concise output stays path-oriented,
+        // while Ruff 0.14 ignores this flag and keeps its legacy lines.
+        args.push("--output-format".into());
+        args.push("concise".into());
     }
     finish_args(args, extra, files)
 }
@@ -171,13 +176,28 @@ fn finish_args(mut args: Vec<OsString>, extra: &[String], files: &[PathBuf]) -> 
     args
 }
 
-/// The files `ruff format --check` reports it would reformat, from its
-/// stdout (`Would reformat: <path>` lines; the trailing summary line is
-/// ignored).
+/// The files `ruff format --check` reports it would reformat. Ruff through
+/// 0.14 prints `Would reformat: <path>`; Ruff 0.16 concise output prints
+/// `<path>:line:col: unformatted: File would be reformatted`.
 fn parse_format_check(stdout: &str) -> Vec<PathBuf> {
     stdout
         .lines()
-        .filter_map(|line| line.strip_prefix("Would reformat: "))
+        .filter_map(|line| {
+            if let Some(path) = line.strip_prefix("Would reformat: ") {
+                return Some(path);
+            }
+            let location = line.strip_suffix(": unformatted: File would be reformatted")?;
+            let (path_and_line, column) = location.rsplit_once(':')?;
+            let (path, line) = path_and_line.rsplit_once(':')?;
+            if line.parse::<usize>().is_err() || column.parse::<usize>().is_err() {
+                return None;
+            }
+            let path = path
+                .rsplit_once(":cell ")
+                .and_then(|(notebook, cell)| cell.parse::<usize>().ok().map(|_| notebook))
+                .unwrap_or(path);
+            Some(path)
+        })
         .map(PathBuf::from)
         .collect()
 }
@@ -285,15 +305,23 @@ mod tests {
 
     #[test]
     fn format_args_carry_no_style_opinions() {
-        // togi adds nothing beyond `--no-cache`, the mode flag, and the
-        // files, so a project's own ruff.toml / [tool.ruff] always wins.
+        // togi adds no style settings: only cache, mode, and machine-readable
+        // output flags, so a project's own ruff.toml / [tool.ruff] wins.
         assert_eq!(
             format_args(false, &[], &paths(&["a.py", "b.ipynb"])),
             os_strings(&["format", "--no-cache", "--", "a.py", "b.ipynb"])
         );
         assert_eq!(
             format_args(true, &[], &paths(&["a.py"])),
-            os_strings(&["format", "--no-cache", "--check", "--", "a.py"])
+            os_strings(&[
+                "format",
+                "--no-cache",
+                "--check",
+                "--output-format",
+                "concise",
+                "--",
+                "a.py"
+            ])
         );
     }
 
@@ -351,6 +379,8 @@ mod tests {
                 "format",
                 "--no-cache",
                 "--check",
+                "--output-format",
+                "concise",
                 "--line-length",
                 "100",
                 "--",
@@ -378,6 +408,12 @@ mod tests {
     fn recorded_format_check_output_parses_the_would_reformat_files() {
         let changed = parse_format_check(&fixture("format-check-mixed.txt"));
         assert_eq!(changed, paths(&["misformatted.py", "notebook.ipynb"]));
+    }
+
+    #[test]
+    fn concise_format_check_output_parses_the_would_reformat_files() {
+        let changed = parse_format_check(&fixture("format-check-concise.txt"));
+        assert_eq!(changed, paths(&["misformatted.py", "dir/notebook.ipynb"]));
     }
 
     #[test]
@@ -564,6 +600,8 @@ mod tests {
                     "format",
                     "--no-cache",
                     "--check",
+                    "--output-format",
+                    "concise",
                     "--",
                     "misformatted.py",
                     "clean.py",

@@ -247,6 +247,7 @@ fn stderr_notes(stderr: &str) -> Vec<String> {
 fn is_normal_chrome(line: &str) -> bool {
     line.starts_with("Scanning ")
         || line.starts_with("Success! No dependency issues found")
+        || line == "For more information, see the documentation: https://deptry.com/"
         || (line.starts_with("Found ")
             && (line.ends_with("dependency issues.") || line.ends_with("dependency violations.")))
         || line.contains(": DEP")
@@ -704,6 +705,7 @@ mod tests {
         let stderr = "Scanning 2 files...\n\
                       main.py:1:8: DEP001 missing dependency\n\
                       Found 1 dependency issues.\n\
+                      For more information, see the documentation: https://deptry.com/\n\
                       Assuming the corresponding module name of package 'PyYAML' is 'pyyaml'.\n";
         assert_eq!(
             super::stderr_notes(stderr),

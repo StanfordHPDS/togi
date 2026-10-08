@@ -190,6 +190,19 @@ mod tests {
     }
 
     #[test]
+    fn tool_ctx_resolves_tool_interpreters_through_the_injected_provider() {
+        let paths = FakeToolPaths::with_python("deptry", "/fake/venv/bin/python");
+        let config = Config::default();
+        let ctx = ToolCtx::new(&paths, &config, false);
+
+        let resolved = ctx
+            .tool_python("deptry")
+            .expect("fake provider has deptry's interpreter");
+        assert_eq!(resolved, PathBuf::from("/fake/venv/bin/python"));
+        assert_eq!(paths.python_requests(), vec!["deptry".to_string()]);
+    }
+
+    #[test]
     fn fake_provider_errors_on_unknown_tools() {
         let paths = FakeToolPaths::with_tool("ruff", "/fake/bin/ruff");
         let config = Config::default();

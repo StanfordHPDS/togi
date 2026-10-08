@@ -20,6 +20,7 @@ mod tests {
         // asset patterns and `uv tool install pkg==X.Y.Z`.
         for (name, version) in [
             ("air", AIR),
+            ("deptry", DEPTRY),
             ("ruff", RUFF),
             ("panache", PANACHE),
             ("sqlfluff", SQLFLUFF),

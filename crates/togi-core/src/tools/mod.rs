@@ -120,6 +120,18 @@ mod tests {
     }
 
     #[test]
+    fn deptry_has_a_human_label_and_honors_its_pin() {
+        let deptry = ToolSpec::builtin("deptry").expect("deptry is built in");
+        let tools = ToolsConfig {
+            pins: BTreeMap::from([("deptry".to_string(), "0.24.0".to_string())]),
+            args: BTreeMap::new(),
+        };
+
+        assert_eq!(label_for("deptry"), "Python dependency checker");
+        assert_eq!(resolve_version(&tools, &deptry), "0.24.0");
+    }
+
+    #[test]
     fn resolve_version_falls_back_to_the_baked_default() {
         let air = ToolSpec::builtin("air").expect("air is built in");
         assert_eq!(

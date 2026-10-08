@@ -143,6 +143,15 @@ mod tests {
     }
 
     #[test]
+    fn deptry_is_a_pinned_uv_tool_builtin() {
+        let spec = ToolSpec::builtin("deptry").expect("deptry is built in");
+
+        assert_eq!(spec.default_version, versions::DEPTRY);
+        assert_eq!(spec.kind, ToolKind::UvTool { package: "deptry" });
+        assert_eq!(ToolSpec::builtins().len(), 6);
+    }
+
+    #[test]
     fn resolves_asset_names_across_all_six_platform_tuples() {
         let cases = [
             (Os::Mac, Arch::X86_64, "tool-x86_64-apple-darwin.tar.gz"),

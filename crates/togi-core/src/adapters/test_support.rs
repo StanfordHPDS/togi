@@ -200,14 +200,27 @@ impl Drop for GaugeGuard<'_> {
 #[derive(Default)]
 pub(crate) struct FakeToolPaths {
     paths: BTreeMap<String, PathBuf>,
+    python_paths: BTreeMap<String, PathBuf>,
     requests: Mutex<Vec<String>>,
+    python_requests: Mutex<Vec<String>>,
 }
 
 impl FakeToolPaths {
     pub fn with_tool(tool: &str, path: &str) -> FakeToolPaths {
         FakeToolPaths {
             paths: BTreeMap::from([(tool.to_string(), PathBuf::from(path))]),
+            python_paths: BTreeMap::new(),
             requests: Mutex::new(Vec::new()),
+            python_requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn with_python(tool: &str, path: &str) -> FakeToolPaths {
+        FakeToolPaths {
+            paths: BTreeMap::new(),
+            python_paths: BTreeMap::from([(tool.to_string(), PathBuf::from(path))]),
+            requests: Mutex::new(Vec::new()),
+            python_requests: Mutex::new(Vec::new()),
         }
     }
 
@@ -220,6 +233,13 @@ impl FakeToolPaths {
     /// Tool names requested through this provider, in call order.
     pub fn requests(&self) -> Vec<String> {
         self.requests.lock().expect("requests lock").clone()
+    }
+
+    pub fn python_requests(&self) -> Vec<String> {
+        self.python_requests
+            .lock()
+            .expect("python requests lock")
+            .clone()
     }
 }
 

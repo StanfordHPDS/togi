@@ -99,7 +99,7 @@ sqlfluff   3.4.0      uv (PyPI)        installed 2026-07-05
 uv         0.9.5      github release   installed 2026-07-05
 
 $ togi version
-togi 0.1.1
+togi 0.1.2
   air 0.10.0
   deptry 0.25.1
   ruff 0.14.0

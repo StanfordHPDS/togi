@@ -165,6 +165,9 @@ mod tests {
             [sql]
             dialect = "bigquery"
 
+            [python]
+            dependencies = true
+
             # NOTE: TOML forbids `air = "..."` under [tools] AND a
             # [tools.air] table (duplicate key); a pin plus args for the
             # same tool uses `[tools.air] version/args` instead.
@@ -191,6 +194,7 @@ mod tests {
         );
         assert_eq!(layer.format_exclude, Some(vec!["renv/**".to_string()]));
         assert_eq!(layer.lint_exclude, Some(vec![]));
+        assert_eq!(layer.python_dependencies, Some(true));
         assert_eq!(layer.sql_dialect.as_deref(), Some("bigquery"));
         assert_eq!(layer.tool_pins["ruff"], "0.14.0");
         assert_eq!(layer.tool_args["air"], vec!["--verbose".to_string()]);
@@ -220,6 +224,10 @@ mod tests {
             dialect = "bigquery"
             engine = "warp"
 
+            [python]
+            dependencies = false
+            environment = "automatic"
+
             [tools.air]
             args = []
             turbo = true
@@ -234,6 +242,7 @@ mod tests {
                 "format.shiny",
                 "future-section",
                 "lint.frobnicate",
+                "python.environment",
                 "sql.engine",
                 "tools.air.turbo",
                 "top-level",
@@ -241,6 +250,37 @@ mod tests {
         );
         // known keys around the unknown ones still land
         assert_eq!(parsed.layer.sql_dialect.as_deref(), Some("bigquery"));
+        assert_eq!(parsed.layer.python_dependencies, Some(false));
+    }
+
+    #[test]
+    fn parses_python_dependencies_as_an_optional_boolean() {
+        let enabled = parse("[python]\ndependencies = true\n").expect("parse true");
+        let disabled = parse("[python]\ndependencies = false\n").expect("parse false");
+        let absent = parse("[python]\n").expect("parse absent key");
+
+        assert_eq!(enabled.layer.python_dependencies, Some(true));
+        assert_eq!(disabled.layer.python_dependencies, Some(false));
+        assert_eq!(absent.layer.python_dependencies, None);
+    }
+
+    #[test]
+    fn deptry_pin_and_passthrough_args_parse_together() {
+        let parsed = parse(
+            r#"
+            [tools.deptry]
+            version = "0.24.0"
+            args = ["--ignore", "DEP002"]
+            "#,
+        )
+        .expect("deptry settings parse");
+
+        assert_no_unknown(&parsed);
+        assert_eq!(parsed.layer.tool_pins["deptry"], "0.24.0");
+        assert_eq!(
+            parsed.layer.tool_args["deptry"],
+            vec!["--ignore".to_string(), "DEP002".to_string()]
+        );
     }
 
     #[test]
@@ -260,6 +300,7 @@ mod tests {
 
     #[test]
     fn wrong_types_are_errors_not_warnings() {
+        assert!(parse("[python]\ndependencies = \"yes\"\n").is_err());
         assert!(parse("[sql]\ndialect = 3\n").is_err());
         assert!(parse("[format]\nlanguages = \"r\"\n").is_err());
         assert!(parse("[tools]\nair = 3\n").is_err());

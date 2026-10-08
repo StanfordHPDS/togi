@@ -139,6 +139,7 @@ const CANONICAL_KEYS: &[&str] = &[
     "format.exclude",
     "lint.languages",
     "lint.exclude",
+    "python.dependencies",
     "sql.dialect",
     "tools.<name>.version",
     "tools.<name>.args",
@@ -171,13 +172,20 @@ fn the_annotated_examples_exercise_every_documented_key() {
     // is anchored to something the binary actually parsed (the examples all
     // run through `every_documented_toml_example_parses_with_no_unknown_keys`).
     let example: String = toml_blocks(&doc()).join("\n");
-    for leaf in ["languages", "exclude", "dialect", "version", "args"] {
+    for leaf in [
+        "languages",
+        "exclude",
+        "dependencies",
+        "dialect",
+        "version",
+        "args",
+    ] {
         assert!(
             example.contains(&format!("{leaf} =")),
             "the TOML examples should set `{leaf}` so the reference is executable"
         );
     }
-    for section in ["[format]", "[lint]", "[sql]", "[tools]"] {
+    for section in ["[format]", "[lint]", "[python]", "[sql]", "[tools]"] {
         assert!(
             example.contains(section),
             "the TOML examples should include a `{section}` table"

@@ -224,9 +224,28 @@ mod tests {
             strings(&["r", "python", "quarto", "sql"])
         );
         assert!(config.lint.exclude.is_empty());
+        assert!(config.python.dependencies);
         assert_eq!(config.sql.dialect, "bigquery");
         assert!(config.tools.pins.is_empty());
         assert!(config.tools.args.is_empty());
+    }
+
+    #[test]
+    fn later_python_dependency_layers_override_earlier_layers_in_both_directions() {
+        let mut config = Config::default();
+        let user = Layer {
+            python_dependencies: Some(false),
+            ..Layer::default()
+        };
+        let project = Layer {
+            python_dependencies: Some(true),
+            ..Layer::default()
+        };
+
+        config.apply(user);
+        assert!(!config.python.dependencies);
+        config.apply(project);
+        assert!(config.python.dependencies);
     }
 
     #[test]
@@ -332,5 +351,39 @@ mod tests {
             .downcast_ref::<MissingConfigFile>()
             .expect("typed so main can exit 2 (usage error)");
         assert!(typed.hint().contains("--config"), "hint: {}", typed.hint());
+    }
+
+    #[test]
+    fn load_reports_a_non_boolean_python_dependencies_value_with_a_hint() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_path = dir.path().join("togi.toml");
+        std::fs::write(&config_path, "[python]\ndependencies = \"yes\"\n").expect("write config");
+
+        let err =
+            load_file(&config_path, &mut Vec::new()).expect_err("dependencies must be a boolean");
+        let rendered = crate::term::render_error(&err, false);
+        assert!(rendered.contains("dependencies"), "{rendered}");
+        assert!(rendered.contains("boolean"), "{rendered}");
+        assert!(rendered.contains("hint:"), "{rendered}");
+    }
+
+    #[test]
+    fn load_warns_for_unknown_python_keys_and_keeps_known_values() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_path = dir.path().join("togi.toml");
+        std::fs::write(
+            &config_path,
+            "[python]\ndependencies = false\nenvironment = \"automatic\"\n",
+        )
+        .expect("write config");
+
+        let mut warnings = Vec::new();
+        let layer = load_file(&config_path, &mut warnings).expect("load config");
+        let mut config = Config::default();
+        config.apply(layer);
+
+        assert!(!config.python.dependencies);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("python.environment"), "{warnings:?}");
     }
 }

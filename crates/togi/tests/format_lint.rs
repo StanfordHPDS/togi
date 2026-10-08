@@ -700,7 +700,8 @@ here=$(pwd)
 out=""
 for f in $files; do
   [ -n "$out" ] && out="$out,"
-  out="$out{\"filename\":\"$here/$f\",\"code\":\"F401\",\"message\":\"\`os\` imported but unused\",\"location\":{\"row\":1,\"column\":8},\"end_location\":{\"row\":1,\"column\":10},\"fix\":{\"applicability\":\"safe\"}}"
+  case "$f" in /*) filename="$f" ;; *) filename="$here/$f" ;; esac
+  out="$out{\"filename\":\"$filename\",\"code\":\"F401\",\"message\":\"\`os\` imported but unused\",\"location\":{\"row\":1,\"column\":8},\"end_location\":{\"row\":1,\"column\":10},\"fix\":{\"applicability\":\"safe\"}}"
 done
 echo "[$out]"
 exit 1

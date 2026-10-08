@@ -32,7 +32,7 @@ pub use panache::PanacheAdapter;
 pub use python::RuffAdapter;
 pub use r::AirAdapter;
 pub use registry::AdapterRegistry;
-pub use runner::{format_all, lint_all};
+pub use runner::{format_all, lint_all, lint_all_in_project};
 pub use sql::SqlFluffAdapter;
 
 /// Formats a batch of files with one underlying tool invocation.
@@ -52,6 +52,28 @@ pub trait Linter {
     /// Lint `files`, applying safe autofixes first when `fix` is set, and
     /// report the remaining findings.
     fn lint(&self, files: &[PathBuf], fix: bool, ctx: &ToolCtx) -> anyhow::Result<Vec<Diagnostic>>;
+}
+
+/// The files and project context supplied to a project-wide linter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectScope {
+    pub root: PathBuf,
+    pub files: Vec<PathBuf>,
+    pub whole_project: bool,
+}
+
+/// Findings and informational notes from a project-wide linter.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectLint {
+    pub diagnostics: Vec<Diagnostic>,
+    pub notes: Vec<String>,
+}
+
+/// A linter that analyzes a project scope once instead of a file batch.
+pub trait ProjectLinter: Send + Sync {
+    fn name(&self) -> &'static str;
+
+    fn lint_project(&self, scope: &ProjectScope, ctx: &ToolCtx) -> anyhow::Result<ProjectLint>;
 }
 
 /// One tool's adapter: both capabilities plus a stable name.

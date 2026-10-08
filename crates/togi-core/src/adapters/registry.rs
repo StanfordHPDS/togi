@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::adapters::{Adapter, RuffAdapter};
+use crate::adapters::{Adapter, ProjectLinter, RuffAdapter};
 use crate::fsx::Language;
 
 /// Maps [`Language`] buckets (from the fsx extension registry) to the
@@ -15,6 +15,7 @@ use crate::fsx::Language;
 #[derive(Default)]
 pub struct AdapterRegistry {
     map: BTreeMap<Language, Arc<dyn Adapter>>,
+    project_linters: BTreeMap<Language, Vec<Arc<dyn ProjectLinter>>>,
 }
 
 impl AdapterRegistry {
@@ -49,6 +50,22 @@ impl AdapterRegistry {
     /// adapter (its files are simply skipped).
     pub fn adapter_for(&self, language: Language) -> Option<&Arc<dyn Adapter>> {
         self.map.get(&language)
+    }
+
+    /// Register a project-wide linter for a language bucket.
+    pub fn register_project_linter(&mut self, language: Language, linter: Arc<dyn ProjectLinter>) {
+        self.project_linters
+            .entry(language)
+            .or_default()
+            .push(linter);
+    }
+
+    /// Project-wide linters registered for `language`.
+    pub fn project_linters_for(&self, language: Language) -> &[Arc<dyn ProjectLinter>] {
+        self.project_linters
+            .get(&language)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 }
 

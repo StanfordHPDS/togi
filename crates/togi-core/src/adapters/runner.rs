@@ -3,12 +3,14 @@
 //! deterministic order.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rayon::prelude::*;
 
-use crate::adapters::{Adapter, AdapterRegistry, Diagnostic, FormatOutcome, ToolCtx};
+use crate::adapters::{
+    Adapter, AdapterRegistry, Diagnostic, FormatOutcome, ProjectLinter, ProjectScope, ToolCtx,
+};
 use crate::fsx::Language;
 
 /// One adapter's format result; `adapter` is its stable name.
@@ -23,6 +25,7 @@ pub struct FormatRun {
 pub struct LintRun {
     pub adapter: &'static str,
     pub result: anyhow::Result<Vec<Diagnostic>>,
+    pub notes: Vec<String>,
 }
 
 /// Format every batch, one adapter invocation per underlying tool, in
@@ -58,14 +61,89 @@ pub fn lint_all(
         .map(|batch| LintRun {
             adapter: batch.adapter.name(),
             result: batch.adapter.lint(&batch.files, fix, ctx),
+            notes: Vec::new(),
         })
         .collect()
+}
+
+/// Lint file batches and project scopes. Ordinary runs execute all tools in
+/// one parallel pass. Fixing runs complete every file adapter before project
+/// linters start, so project analysis observes the rewritten files.
+pub fn lint_all_in_project(
+    registry: &AdapterRegistry,
+    groups: &BTreeMap<Language, Vec<PathBuf>>,
+    root: &Path,
+    whole_project: bool,
+    fix: bool,
+    ctx: &ToolCtx,
+) -> Vec<LintRun> {
+    let file_batches = batches(registry, groups);
+    let project_batches = project_batches(registry, groups, root, whole_project);
+
+    let mut runs = if fix {
+        let mut file_runs: Vec<LintRun> = file_batches
+            .par_iter()
+            .map(|batch| run_file_linter(batch, true, ctx))
+            .collect();
+        let project_runs = project_batches
+            .par_iter()
+            .map(|batch| run_project_linter(batch, ctx))
+            .collect::<Vec<_>>();
+        file_runs.extend(project_runs);
+        file_runs
+    } else {
+        let mut tasks = Vec::with_capacity(file_batches.len() + project_batches.len());
+        tasks.extend(file_batches.iter().map(LintTask::File));
+        tasks.extend(project_batches.iter().map(LintTask::Project));
+        tasks
+            .par_iter()
+            .map(|task| match task {
+                LintTask::File(batch) => run_file_linter(batch, false, ctx),
+                LintTask::Project(batch) => run_project_linter(batch, ctx),
+            })
+            .collect()
+    };
+    runs.sort_by_key(|run| run.adapter);
+    runs
+}
+
+fn run_file_linter(batch: &Batch, fix: bool, ctx: &ToolCtx) -> LintRun {
+    LintRun {
+        adapter: batch.adapter.name(),
+        result: batch.adapter.lint(&batch.files, fix, ctx),
+        notes: Vec::new(),
+    }
+}
+
+fn run_project_linter(batch: &ProjectBatch, ctx: &ToolCtx) -> LintRun {
+    match batch.linter.lint_project(&batch.scope, ctx) {
+        Ok(outcome) => LintRun {
+            adapter: batch.linter.name(),
+            result: Ok(outcome.diagnostics),
+            notes: outcome.notes,
+        },
+        Err(err) => LintRun {
+            adapter: batch.linter.name(),
+            result: Err(err),
+            notes: Vec::new(),
+        },
+    }
+}
+
+enum LintTask<'a> {
+    File(&'a Batch),
+    Project(&'a ProjectBatch),
 }
 
 /// One adapter's whole workload for a run.
 struct Batch {
     adapter: Arc<dyn Adapter>,
     files: Vec<PathBuf>,
+}
+
+struct ProjectBatch {
+    linter: Arc<dyn ProjectLinter>,
+    scope: ProjectScope,
 }
 
 /// Fold language buckets into per-adapter batches, keyed and sorted by
@@ -96,6 +174,37 @@ fn batches(registry: &AdapterRegistry, groups: &BTreeMap<Language, Vec<PathBuf>>
             })
             .files
             .extend(files.iter().cloned());
+    }
+    by_name.into_values().collect()
+}
+
+/// Merge registrations for the same project linter name into one scope.
+fn project_batches(
+    registry: &AdapterRegistry,
+    groups: &BTreeMap<Language, Vec<PathBuf>>,
+    root: &Path,
+    whole_project: bool,
+) -> Vec<ProjectBatch> {
+    let mut by_name: BTreeMap<&'static str, ProjectBatch> = BTreeMap::new();
+    for (&language, files) in groups {
+        if files.is_empty() {
+            continue;
+        }
+        for linter in registry.project_linters_for(language) {
+            by_name
+                .entry(linter.name())
+                .or_insert_with(|| ProjectBatch {
+                    linter: Arc::clone(linter),
+                    scope: ProjectScope {
+                        root: root.to_path_buf(),
+                        files: Vec::new(),
+                        whole_project,
+                    },
+                })
+                .scope
+                .files
+                .extend(files.iter().cloned());
+        }
     }
     by_name.into_values().collect()
 }

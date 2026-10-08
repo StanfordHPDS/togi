@@ -3,8 +3,9 @@
 togi (研ぎ) is a formatter and
 linter for data science projects. It covers R, Python, Quarto, Markdown, and
 SQL behind a single stable interface, and it manages its own copies of the
-underlying tools, [air], [ruff], [panache], and [sqlfluff]. You never install, version, or configure those
-tools yourself, and when one of them changes, the togi interface does not.
+underlying tools, [air], [ruff], [panache], [sqlfluff], and [deptry]. You never
+install, version, or configure those tools yourself, and when one of them
+changes, the togi interface does not.
 
 - **One command for the whole project.** `togi format` and `togi lint` route
   every file to the right tool and merge the results into one report with one
@@ -23,6 +24,7 @@ tools yourself, and when one of them changes, the togi interface does not.
 [ruff]: https://github.com/astral-sh/ruff
 [panache]: https://github.com/jolars/panache
 [sqlfluff]: https://github.com/sqlfluff/sqlfluff
+[deptry]: https://github.com/fpgmaas/deptry
 
 ## Install
 
@@ -90,6 +92,7 @@ privately, and never touch your system installs:
 ```console
 $ togi tools list
 air        0.10.0     github release   installed 2026-07-05
+deptry     0.25.1     uv (PyPI)        installed 2026-07-05
 ruff       0.14.0     github release   installed 2026-07-05
 panache    2.60.0     github release   installed 2026-07-05
 sqlfluff   3.4.0      uv (PyPI)        installed 2026-07-05
@@ -98,6 +101,7 @@ uv         0.9.5      github release   installed 2026-07-05
 $ togi version
 togi 0.1.1
   air 0.10.0
+  deptry 0.25.1
   ruff 0.14.0
   panache 2.60.0
   sqlfluff 3.4.0
@@ -134,6 +138,22 @@ exclude = ["vendor/**"]   # added on top of the built-in excludes
 [sql]
 dialect = "duckdb"
 ```
+
+Python linting also checks declared dependencies with deptry by default. The
+check runs when the project root has `pyproject.toml` or `requirements.txt` and
+an existing `VIRTUAL_ENV`, or the root `.venv` when that variable does not name
+an existing directory, has `site-packages`. With no usable environment,
+linting continues successfully and prints one note that suggests `uv sync`.
+deptry scans the project once, but
+togi reports source findings only for the Python files selected by the command;
+declaration findings appear only for a whole-project run. `togi lint --fix`
+runs the check after file edits, and deptry findings themselves are not
+autofixed.
+
+Set `[python] dependencies = false` to opt out. The project's native
+`[tool.deptry]` settings still apply, while `[tools] deptry` pins togi's
+managed copy and `[tools.deptry] args` appends command-line options. See the
+configuration reference for environment lookup and metadata-scope details.
 
 Every key, its default, and how project and user config layer are documented
 in [docs/togi.toml.md](docs/togi.toml.md).

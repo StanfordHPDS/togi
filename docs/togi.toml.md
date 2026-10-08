@@ -69,6 +69,10 @@ ruff = "0.14.0"
 [tools.air]
 version = "0.10.0"
 args = ["--verbose"]
+
+[tools.deptry]
+version = "0.25.1"
+args = ["--ignore", "DEP004"]
 ```
 
 ## `[format]` and `[lint]`
@@ -110,6 +114,41 @@ user-level config at `~/.config/panache/config.toml` (or
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `dependencies` | boolean | `true` | Whether `togi lint` checks Python project dependencies. Set this to `false` to disable the check without disabling other Python linting. |
+
+The dependency check runs only when Python files are selected, this key is
+`true`, and the project root contains `pyproject.toml` or `requirements.txt`.
+It uses an existing `VIRTUAL_ENV` when that directory exists, then falls back
+to `<root>/.venv`. The environment must contain `lib/python*/site-packages` on
+Unix or `Lib/site-packages` on Windows. If no usable environment exists, togi
+does not install deptry, does not change the exit status, and prints one note
+on stderr suggesting `uv sync`.
+
+deptry scans the whole project once. On a whole-project invocation, togi
+reports both selected-source and dependency-declaration findings. With
+explicit paths, it reports source findings only for the selected Python files
+and omits declaration findings. `[lint] exclude` likewise removes findings for
+excluded source files. Under `togi lint --fix`, file linters finish their edits
+before deptry scans; deptry findings are never marked fixable. Notes and
+upstream warnings stay on stderr, so `--format json` stdout remains pure JSON.
+
+The project's native `[tool.deptry]` table controls deptry rules and inputs.
+For example, it can name a custom requirements file such as `deps.in`, though
+togi's initial root gate still requires `pyproject.toml` or `requirements.txt`.
+This native table belongs in `pyproject.toml`, not `togi.toml`:
+
+```toml-native
+[tool.deptry]
+requirements_files = ["deps.in"]
+ignore = ["DEP004"]
+```
+
+togi runs deptry 0.25.1 from a private uv-managed environment. Its isolated
+launcher reads distribution and module metadata only from the selected
+project `site-packages`, including mappings where distribution and import
+names differ. It does not read system or user site-packages, execute `.pth`
+files, or import project packages. Standard-library classification follows
+the managed tool interpreter's Python version. An unsynced environment can
+make deptry guess an import name; togi keeps that upstream warning visible.
 
 ## `[sql]`
 
@@ -153,9 +192,10 @@ generated config entirely, and these two settings no longer apply.
 
 ## `[tools]` and `[tools.<name>]`
 
-Version pins and passthrough arguments for the managed tools (`air`, `ruff`,
-`panache`, `sqlfluff`; `uv` bootstraps sqlfluff). Omit everything here to use
-the versions baked into this togi release — `togi version` lists them.
+Version pins and passthrough arguments for the managed tools (`air`, `deptry`,
+`ruff`, `panache`, `sqlfluff`; `uv` bootstraps the Python tools). Omit
+everything here to use the versions baked into this togi release —
+`togi version` lists them.
 
 There are two shapes:
 
@@ -177,3 +217,8 @@ There are two shapes:
 [tools.sqlfluff]
 args = ["--exclude-rules", "LT05"]
 ```
+
+deptry can be pinned with either `deptry = "0.25.1"` under `[tools]` or a
+`version` in `[tools.deptry]`. Its `args` are appended after togi's required
+reporting options. Custom pins must retain the deptry lookup interfaces used by
+the isolated launcher; incompatible versions fail with a configuration hint.

@@ -1,0 +1,134 @@
+name: Update managed tools
+
+on:
+  schedule:
+    - cron: '17 9 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: managed-tool-updates
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    name: discover and validate updates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.changes.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Test updater
+        run: python3 -m unittest scripts.tests.test_update_managed_tools
+      - name: Discover stable releases
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/update-managed-tools.py update --repo .
+      - id: changes
+        name: Detect changes
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Format
+        if: steps.changes.outputs.changed == 'true'
+        run: cargo fmt --all --check
+      - name: Clippy
+        if: steps.changes.outputs.changed == 'true'
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Test offline
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          INSTA_UPDATE: 'no'
+        run: cargo test --workspace --locked
+      - name: Check documentation
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --locked
+      - name: Check spelling
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          cargo install typos-cli --version 1.50.2 --locked
+          typos
+      - name: Test online paths
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          INSTA_UPDATE: 'no'
+        run: cargo test --workspace --locked --features online-tests
+      - name: Test real managed tools
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          INSTA_UPDATE: 'no'
+        run: cargo test --workspace --locked --features online-tests -- --ignored
+      - name: Build update patch
+        if: steps.changes.outputs.changed == 'true'
+        run: git diff --binary --full-index > managed-tool-update.patch
+      - name: Upload update patch
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: managed-tool-update
+          path: managed-tool-update.patch
+          retention-days: 1
+
+  publish:
+    name: publish update PR
+    needs: discover
+    if: needs.discover.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: managed-tool-update
+          path: ${{ runner.temp }}/managed-tool-update
+      - name: Apply validated update
+        run: git apply "$RUNNER_TEMP/managed-tool-update/managed-tool-update.patch"
+      - id: pull-request
+        name: Create or refresh pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ github.token }}
+          branch: automated/managed-tool-updates
+          base: main
+          delete-branch: true
+          commit-message: update managed tools
+          committer: Malcolm Barrett <malcolmbarrett@gmail.com>
+          author: Malcolm Barrett <malcolmbarrett@gmail.com>
+          title: update managed tools
+          labels: managed-tool-update
+          body: |
+            Updates every managed tool with a newer stable upstream release and
+            bumps the togi patch version. The workflow validated release assets,
+            checksum contents, offline gates, documentation, and real managed
+            tool behavior before creating this commit.
+
+            Merge only after reviewing upstream compatibility. A green merge
+            releases the exact post-merge CI commit as the new togi version.
+      - name: Dispatch CI for the generated commit
+        if: >-
+          steps.pull-request.outputs.pull-request-operation == 'created' ||
+          steps.pull-request.outputs.pull-request-operation == 'updated'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yml --ref automated/managed-tool-updates

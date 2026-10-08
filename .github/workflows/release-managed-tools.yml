@@ -1,0 +1,123 @@
+name: Release managed tool update
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: managed-tool-release-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      create_tag: ${{ steps.plan.outputs.create_tag }}
+      dispatch_release: ${{ steps.plan.outputs.dispatch_release }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      MERGE_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: qualify
+        name: Match the tested merge to the updater PR
+        shell: bash
+        run: |
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/commits/$MERGE_SHA/pulls" \
+            > "$RUNNER_TEMP/pulls.json"
+          # qualify-pr requires merged=true, label managed-tool-update,
+          # base=main, and merge_commit_sha equal to the successful CI commit.
+          python3 scripts/update-managed-tools.py qualify-pr \
+            --pull-requests "$RUNNER_TEMP/pulls.json" \
+            --merge-sha "$MERGE_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.qualify.outputs.eligible == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.qualify.outputs.eligible == 'true'
+      - name: Test updater
+        if: steps.qualify.outputs.eligible == 'true'
+        run: python3 -m unittest scripts.tests.test_update_managed_tools
+      - name: Validate the committed tool releases
+        if: steps.qualify.outputs.eligible == 'true'
+        run: python3 scripts/update-managed-tools.py validate-pins --repo .
+      - name: Test real managed tools at the merge commit
+        if: steps.qualify.outputs.eligible == 'true'
+        env:
+          INSTA_UPDATE: 'no'
+        run: cargo test --workspace --locked --features online-tests -- --ignored
+      - id: plan
+        name: Plan an idempotent release
+        if: steps.qualify.outputs.eligible == 'true'
+        shell: bash
+        run: |
+          python3 scripts/update-managed-tools.py validate-diff \
+            --repo . \
+            --merge-sha "$MERGE_SHA"
+          LATEST_RELEASE=$(gh release view --json tagName --jq '.tagName' 2>/dev/null || true)
+          python3 scripts/update-managed-tools.py plan-release \
+            --repo . \
+            --merge-sha "$MERGE_SHA" \
+            --latest-release "$LATEST_RELEASE" \
+            --github-output "$GITHUB_OUTPUT"
+
+  publish:
+    needs: inspect
+    if: needs.inspect.outputs.dispatch_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      MERGE_SHA: ${{ github.event.workflow_run.head_sha }}
+      TAG: ${{ needs.inspect.outputs.tag }}
+    steps:
+      - name: Create exact release tag
+        if: needs.inspect.outputs.create_tag == 'true'
+        shell: bash
+        run: |
+          EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" \
+            --jq '.object.sha' 2>/dev/null || true)
+          if [ -n "$EXISTING" ]; then
+            if [ "$EXISTING" != "$MERGE_SHA" ]; then
+              echo "tag $TAG points at $EXISTING, expected $MERGE_SHA" >&2
+              exit 1
+            fi
+            exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+            --method POST \
+            -f "ref=refs/tags/$TAG" \
+            -f "sha=$MERGE_SHA"
+      - name: Dispatch cargo-dist release
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            exit 0
+          fi
+          ACTIVE=$(gh run list --workflow release.yml --branch "$TAG" \
+            --json status --jq '[.[] | select(.status == "queued" or .status == "in_progress")] | length')
+          if [ "$ACTIVE" -eq 0 ]; then
+            gh workflow run release.yml --ref "$TAG" -f "tag=$TAG"
+          fi

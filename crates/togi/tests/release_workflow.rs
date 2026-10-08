@@ -29,6 +29,47 @@ fn release_workflow() -> String {
     read(&[".github", "workflows", "release.yml"])
 }
 
+fn tool_update_workflow() -> String {
+    read(&[".github", "workflows", "update-managed-tools.yml"])
+}
+
+fn tool_update_release_workflow() -> String {
+    read(&[".github", "workflows", "release-managed-tools.yml"])
+}
+
+fn ci_workflow() -> String {
+    read(&[".github", "workflows", "ci.yml"])
+}
+
+fn workflow(yml: &str) -> serde_yaml::Value {
+    serde_yaml::from_str(yml).expect("valid workflow YAML")
+}
+
+fn field<'a>(value: &'a serde_yaml::Value, key: &str) -> &'a serde_yaml::Value {
+    value
+        .as_mapping()
+        .and_then(|mapping| mapping.get(serde_yaml::Value::String(key.to_string())))
+        .unwrap_or_else(|| panic!("missing workflow key {key}"))
+}
+
+fn assert_permissions(value: &serde_yaml::Value, expected: &[(&str, &str)]) {
+    let permissions = field(value, "permissions")
+        .as_mapping()
+        .expect("permissions must be a mapping");
+    assert_eq!(
+        permissions.len(),
+        expected.len(),
+        "permissions must be scoped"
+    );
+    for (name, access) in expected {
+        assert_eq!(
+            permissions.get(serde_yaml::Value::String((*name).to_string())),
+            Some(&serde_yaml::Value::String((*access).to_string())),
+            "permission {name}"
+        );
+    }
+}
+
 fn dist_config() -> String {
     read(&["dist-workspace.toml"])
 }
@@ -64,21 +105,167 @@ fn release_workflow_parses_as_yaml() {
 }
 
 #[test]
-fn release_workflow_triggers_on_version_tags_only() {
-    let yml = release_workflow();
+fn release_workflow_accepts_an_explicit_dispatch() {
+    let parsed = workflow(&release_workflow());
+    let triggers = field(&parsed, "on");
+    let dispatch = field(triggers, "workflow_dispatch");
+    let tag = field(field(dispatch, "inputs"), "tag");
+    assert_eq!(field(tag, "required").as_bool(), Some(true));
+    let trigger_names: Vec<&str> = triggers
+        .as_mapping()
+        .expect("trigger mapping")
+        .keys()
+        .filter_map(serde_yaml::Value::as_str)
+        .collect();
+    assert_eq!(trigger_names, ["workflow_dispatch"]);
+}
+
+#[test]
+fn managed_tool_updates_run_monthly_or_manually_with_narrow_permissions() {
+    let yml = tool_update_workflow();
+    let parsed = workflow(&yml);
+    let triggers = field(&parsed, "on");
+    let schedules = field(triggers, "schedule")
+        .as_sequence()
+        .expect("schedule sequence");
+    assert_eq!(schedules.len(), 1, "one monthly schedule");
+    let cron = field(&schedules[0], "cron").as_str().expect("cron string");
+    let fields: Vec<&str> = cron.split_whitespace().collect();
+    assert_eq!(fields.len(), 5, "standard cron expression");
+    let minute = fields[0].parse::<u8>().expect("numeric cron minute");
+    let hour = fields[1].parse::<u8>().expect("numeric cron hour");
     assert!(
-        yml.contains("tags:"),
-        "release workflow must trigger on tag pushes"
+        minute > 0
+            && minute < 60
+            && hour < 24
+            && fields[2] == "1"
+            && fields[3] == "*"
+            && fields[4] == "*",
+        "schedule must run off the hour on the first day of each month: {cron}"
     );
-    // dist matches full and prerelease semver tags; either way the pattern
-    // starts with a v.
+    field(triggers, "workflow_dispatch");
+    assert_permissions(&parsed, &[("contents", "read")]);
+    let jobs = field(&parsed, "jobs").as_mapping().expect("jobs mapping");
+    let discover = jobs
+        .get(serde_yaml::Value::String("discover".to_string()))
+        .expect("read-only discovery and validation job");
+    let publish = jobs
+        .get(serde_yaml::Value::String("publish".to_string()))
+        .expect("PR publishing job");
+    assert_permissions(discover, &[("contents", "read")]);
+    assert_permissions(
+        publish,
+        &[
+            ("actions", "write"),
+            ("contents", "write"),
+            ("pull-requests", "write"),
+        ],
+    );
+    assert_eq!(field(publish, "needs").as_str(), Some("discover"));
     assert!(
-        yml.contains("'**[0-9]+.[0-9]+.[0-9]+*'") || yml.contains("v*"),
-        "tag trigger must match vX.Y.Z version tags"
+        yml.contains("branch: automated/managed-tool-updates"),
+        "a stable update branch must refresh the existing PR"
+    );
+    let concurrency = field(&parsed, "concurrency");
+    assert!(
+        field(concurrency, "group")
+            .as_str()
+            .is_some_and(|group| group.contains("managed-tool")),
+        "monthly and manual runs must share one concurrency group"
     );
     assert!(
-        !yml.contains("pull_request:"),
-        "release workflow must not run on pull requests (that is ci.yml's job)"
+        yml.contains("cargo test --workspace --locked --features online-tests -- --ignored"),
+        "the update PR must validate real managed-tool downloads"
+    );
+    assert!(
+        yml.contains("path: ${{ runner.temp }}/managed-tool-update"),
+        "the downloaded patch must stay outside the checkout"
+    );
+    assert!(
+        yml.contains("gh workflow run ci.yml --ref automated/managed-tool-updates"),
+        "GITHUB_TOKEN-created PRs must explicitly dispatch CI for their commit"
+    );
+    let ci = workflow(&ci_workflow());
+    field(field(&ci, "on"), "workflow_dispatch");
+}
+
+#[test]
+fn managed_tool_release_waits_for_successful_post_merge_ci() {
+    let yml = tool_update_release_workflow();
+    let parsed = workflow(&yml);
+    let workflow_run = field(field(&parsed, "on"), "workflow_run");
+    let workflows = field(workflow_run, "workflows")
+        .as_sequence()
+        .expect("workflow names");
+    assert!(
+        workflows.iter().any(|name| name.as_str() == Some("CI")),
+        "release must wait for the main CI workflow"
+    );
+    assert!(
+        field(workflow_run, "types")
+            .as_sequence()
+            .is_some_and(|types| types.iter().any(|kind| kind.as_str() == Some("completed"))),
+        "release must wait for CI completion"
+    );
+    assert!(
+        yml.contains("github.event.workflow_run.conclusion == 'success'"),
+        "failed or cancelled CI must not release"
+    );
+    assert!(
+        yml.contains("github.event.workflow_run.head_branch == 'main'"),
+        "only post-merge main CI may release"
+    );
+    assert!(
+        yml.contains("github.event.workflow_run.head_sha"),
+        "the release decision and tag must use the exact CI commit"
+    );
+    assert!(
+        yml.contains("merge_commit_sha"),
+        "the associated merged PR must match the CI commit"
+    );
+    assert!(
+        yml.contains("managed-tool-update"),
+        "the workflow must verify that the merge came from the updater PR"
+    );
+    assert!(
+        yml.contains("scripts/update-managed-tools.py"),
+        "the workflow must use the tested release decision logic"
+    );
+    assert!(
+        yml.contains("validate-pins --repo ."),
+        "release must validate the committed pins rather than moving latest versions"
+    );
+    assert!(
+        yml.contains("cargo test --workspace --locked --features online-tests -- --ignored"),
+        "the exact merge commit must pass real managed-tool tests before release"
+    );
+    assert!(
+        yml.contains("gh workflow run release.yml --ref \"$TAG\" -f \"tag=$TAG\""),
+        "cargo-dist must run from and release the exact validated tag"
+    );
+    assert!(
+        !yml.contains("uses: actions/checkout@v6\n        with:\n          ref: ${{ github.event.workflow_run.head_sha }}\n          fetch-depth: 0\n          persist-credentials: true"),
+        "the write-capable publish job must not check out workflow-run code"
+    );
+    assert!(
+        yml.contains("git/ref/tags/$TAG") && yml.contains("$EXISTING\" != \"$MERGE_SHA"),
+        "a failed-job retry must accept only an existing tag at the exact merge commit"
+    );
+    assert_permissions(&parsed, &[("contents", "read")]);
+    let jobs = field(&parsed, "jobs").as_mapping().expect("jobs mapping");
+    let inspect = jobs
+        .get(serde_yaml::Value::String("inspect".to_string()))
+        .expect("read-only release inspection job");
+    let publish = jobs
+        .get(serde_yaml::Value::String("publish".to_string()))
+        .expect("release publishing job");
+    assert_permissions(inspect, &[("contents", "read"), ("pull-requests", "read")]);
+    assert_permissions(publish, &[("actions", "write"), ("contents", "write")]);
+    assert_eq!(field(publish, "needs").as_str(), Some("inspect"));
+    assert_eq!(
+        field(field(publish, "env"), "GH_REPO").as_str(),
+        Some("${{ github.repository }}"),
+        "gh must know the repository without a privileged checkout"
     );
 }
 
@@ -170,7 +357,16 @@ fn dist_config_skips_pull_request_runs() {
         .expect("dist-workspace.toml must set [dist] pr-run-mode");
     assert_eq!(
         mode, "skip",
-        "release plumbing must fire on tags only; ci.yml owns PR checks"
+        "release plumbing must skip pull requests; ci.yml owns PR checks"
+    );
+    let dispatch = parsed
+        .get("dist")
+        .and_then(|d| d.get("dispatch-releases"))
+        .and_then(|value| value.as_bool());
+    assert_eq!(
+        dispatch,
+        Some(true),
+        "releases must support exact-tag dispatch"
     );
 }
 

@@ -23,6 +23,9 @@ windows-archive = ".zip"
 checksum = "sha256"
 # Which actions to run on pull requests (ci.yml owns PR checks)
 pr-run-mode = "skip"
+# Run releases through an explicit workflow dispatch so automation using the
+# repository token can start cargo-dist after validating the merged commit.
+dispatch-releases = true
 # Whether to install an updater program
 install-updater = false
 # Path that installers should place binaries in

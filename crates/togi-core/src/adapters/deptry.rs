@@ -739,6 +739,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn setup_project(root: &Path) {
         fs::create_dir_all(root.join(".venv/lib/python3.13/site-packages")).unwrap();
         fs::write(

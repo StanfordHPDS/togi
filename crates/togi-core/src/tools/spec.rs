@@ -91,7 +91,7 @@ impl ToolSpec {
                 kind: ToolKind::GithubBinary {
                     repo: "jolars/panache",
                     asset_pattern: "panache-{arch}-{os}.{ext}",
-                    checksum_pattern: Some("panache-{arch}-{os}.{ext}.sha256"),
+                    checksum_pattern: Some("SHA256SUMS"),
                 },
             },
             ToolSpec {
@@ -292,6 +292,18 @@ mod tests {
                 ToolKind::GithubBinary { repo, .. } => assert_eq!(repo, want_repo, "{name}"),
                 other => panic!("{name} must be a GithubBinary, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn builtin_panache_uses_the_shared_checksum_list() {
+        let spec = ToolSpec::builtin("panache").expect("panache");
+        for platform in Platform::ALL {
+            assert_eq!(
+                spec.checksum_asset_name(platform, spec.default_version),
+                Some("SHA256SUMS".to_string()),
+                "{platform:?}"
+            );
         }
     }
 

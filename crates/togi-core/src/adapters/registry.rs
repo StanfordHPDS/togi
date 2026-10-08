@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::adapters::{Adapter, ProjectLinter, RuffAdapter};
+use crate::adapters::{Adapter, DeptryAdapter, ProjectLinter, RuffAdapter};
 use crate::fsx::Language;
 
 /// Maps [`Language`] buckets (from the fsx extension registry) to the
@@ -30,6 +30,7 @@ impl AdapterRegistry {
     pub fn with_defaults() -> AdapterRegistry {
         let mut registry = AdapterRegistry::new();
         registry.register(Language::Python, Arc::new(RuffAdapter));
+        registry.register_project_linter(Language::Python, Arc::new(DeptryAdapter::new()));
         registry.register(Language::R, Arc::new(crate::adapters::AirAdapter));
         let panache: Arc<dyn Adapter> = Arc::new(crate::adapters::PanacheAdapter::new());
         registry.register(Language::Quarto, Arc::clone(&panache));
@@ -186,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_register_no_project_linters_yet() {
+    fn defaults_register_only_the_python_dependency_linter() {
         let registry = AdapterRegistry::with_defaults();
         for language in [
             Language::R,
@@ -195,7 +196,16 @@ mod tests {
             Language::Markdown,
             Language::Sql,
         ] {
-            assert!(registry.project_linters_for(language).is_empty());
+            let names: Vec<_> = registry
+                .project_linters_for(language)
+                .iter()
+                .map(|linter| linter.name())
+                .collect();
+            if language == Language::Python {
+                assert_eq!(names, ["deptry"]);
+            } else {
+                assert!(names.is_empty());
+            }
         }
     }
 }

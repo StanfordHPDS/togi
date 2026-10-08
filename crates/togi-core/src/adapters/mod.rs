@@ -7,7 +7,6 @@
 //! source-level: implement [`Adapter`] and register it for its
 //! [`Language`](crate::fsx::Language) bucket in [`AdapterRegistry`].
 
-#[cfg(test)]
 mod deptry;
 mod diagnostic;
 mod outcome;
@@ -28,6 +27,7 @@ use crate::config::Config;
 use crate::term::HintExt;
 use crate::tools::{InstallContext, ToolSpec};
 
+pub use deptry::DeptryAdapter;
 pub use diagnostic::{Diagnostic, Position, Range, Severity};
 pub use outcome::FormatOutcome;
 pub use panache::PanacheAdapter;

@@ -926,7 +926,7 @@ fi
 exit 0
 "#;
         let sb = deptry_project(true, shim);
-        sb.write_file("main.py", "import os\n");
+        sb.write_file("main.py", "import os\nprint(1)\n");
         sb.cmd(&["lint", "--fix", "--format", "json"])
             .assert()
             .success()

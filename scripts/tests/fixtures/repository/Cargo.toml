@@ -1,0 +1,7 @@
+[workspace]
+
+[workspace.package]
+version = "1.2.3"
+
+[workspace.dependencies]
+togi-core = { path = "crates/togi-core", version = "1.2.3" }

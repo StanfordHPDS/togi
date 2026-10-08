@@ -1,0 +1,9 @@
+[
+  "panache-x86_64-apple-darwin.tar.gz",
+  "panache-aarch64-apple-darwin.tar.gz",
+  "panache-x86_64-unknown-linux-gnu.tar.gz",
+  "panache-aarch64-unknown-linux-gnu.tar.gz",
+  "panache-x86_64-pc-windows-msvc.zip",
+  "panache-aarch64-pc-windows-msvc.zip",
+  "SHA256SUMS"
+]

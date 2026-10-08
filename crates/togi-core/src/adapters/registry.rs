@@ -55,7 +55,8 @@ impl AdapterRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::test_support::FakeAdapter;
+    use crate::adapters::test_support::{FakeAdapter, FakeProjectLinter};
+    use crate::adapters::{Adapter, ProjectLinter};
 
     #[test]
     fn with_defaults_routes_python_to_the_ruff_adapter() {
@@ -131,6 +132,53 @@ mod tests {
         for language in [Language::Quarto, Language::Markdown] {
             let adapter = registry.adapter_for(language).expect("registered");
             assert_eq!(adapter.name(), "panache");
+        }
+    }
+
+    #[test]
+    fn project_linters_are_registered_separately_from_file_adapters() {
+        let deptry: Arc<dyn ProjectLinter> = Arc::new(FakeProjectLinter::new("deptry"));
+        let ruff: Arc<dyn Adapter> = Arc::new(FakeAdapter::new("ruff"));
+        let mut registry = AdapterRegistry::new();
+
+        registry.register(Language::Python, Arc::clone(&ruff));
+        registry.register_project_linter(Language::Python, Arc::clone(&deptry));
+
+        assert!(Arc::ptr_eq(
+            registry
+                .adapter_for(Language::Python)
+                .expect("ruff adapter"),
+            &ruff
+        ));
+        let project = registry.project_linters_for(Language::Python);
+        assert_eq!(project.len(), 1);
+        assert!(Arc::ptr_eq(&project[0], &deptry));
+    }
+
+    #[test]
+    fn one_project_linter_can_be_shared_across_language_buckets() {
+        let linter: Arc<dyn ProjectLinter> = Arc::new(FakeProjectLinter::new("shared"));
+        let mut registry = AdapterRegistry::new();
+        registry.register_project_linter(Language::Python, Arc::clone(&linter));
+        registry.register_project_linter(Language::Quarto, Arc::clone(&linter));
+
+        assert!(Arc::ptr_eq(
+            &registry.project_linters_for(Language::Python)[0],
+            &registry.project_linters_for(Language::Quarto)[0]
+        ));
+    }
+
+    #[test]
+    fn defaults_register_no_project_linters_yet() {
+        let registry = AdapterRegistry::with_defaults();
+        for language in [
+            Language::R,
+            Language::Python,
+            Language::Quarto,
+            Language::Markdown,
+            Language::Sql,
+        ] {
+            assert!(registry.project_linters_for(language).is_empty());
         }
     }
 }

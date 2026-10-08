@@ -11,7 +11,10 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use crate::adapters::{Adapter, Diagnostic, FormatOutcome, Formatter, Linter, ToolCtx, ToolPaths};
+use crate::adapters::{
+    Adapter, Diagnostic, FormatOutcome, Formatter, Linter, ProjectLint, ProjectLinter,
+    ProjectScope, ToolCtx, ToolPaths,
+};
 
 /// One recorded `format` call: the batch and the `check` flag.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +165,69 @@ impl Linter for FakeAdapter {
 impl Adapter for FakeAdapter {
     fn name(&self) -> &'static str {
         self.name
+    }
+}
+
+/// A project linter fake that records each scope and returns scripted data.
+#[derive(Default)]
+pub(crate) struct FakeProjectLinter {
+    name: &'static str,
+    calls: Mutex<Vec<ProjectScope>>,
+    diagnostics: Vec<Diagnostic>,
+    notes: Vec<String>,
+    fails_with: Option<String>,
+    events: Option<std::sync::Arc<Mutex<Vec<&'static str>>>>,
+}
+
+impl FakeProjectLinter {
+    pub fn new(name: &'static str) -> FakeProjectLinter {
+        FakeProjectLinter {
+            name,
+            ..FakeProjectLinter::default()
+        }
+    }
+
+    pub fn returning(mut self, diagnostics: Vec<Diagnostic>, notes: &[&str]) -> Self {
+        self.diagnostics = diagnostics;
+        self.notes = notes.iter().map(|note| note.to_string()).collect();
+        self
+    }
+
+    pub fn failing(mut self, message: &str) -> Self {
+        self.fails_with = Some(message.to_string());
+        self
+    }
+
+    pub fn recording(mut self, events: std::sync::Arc<Mutex<Vec<&'static str>>>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    pub fn calls(&self) -> Vec<ProjectScope> {
+        self.calls.lock().expect("project calls lock").clone()
+    }
+}
+
+impl ProjectLinter for FakeProjectLinter {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn lint_project(&self, scope: &ProjectScope, _ctx: &ToolCtx) -> anyhow::Result<ProjectLint> {
+        self.calls
+            .lock()
+            .expect("project calls lock")
+            .push(scope.clone());
+        if let Some(events) = &self.events {
+            events.lock().expect("events lock").push("project");
+        }
+        if let Some(message) = &self.fails_with {
+            return Err(anyhow::anyhow!(message.clone()));
+        }
+        Ok(ProjectLint {
+            diagnostics: self.diagnostics.clone(),
+            notes: self.notes.clone(),
+        })
     }
 }
 

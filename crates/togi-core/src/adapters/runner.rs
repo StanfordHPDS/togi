@@ -103,10 +103,13 @@ fn batches(registry: &AdapterRegistry, groups: &BTreeMap<Language, Vec<PathBuf>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::time::Duration;
 
-    use crate::adapters::test_support::{ConcurrencyGauge, FakeAdapter, FakeToolPaths};
-    use crate::adapters::{Position, Range, Severity};
+    use crate::adapters::test_support::{
+        ConcurrencyGauge, FakeAdapter, FakeProjectLinter, FakeToolPaths,
+    };
+    use crate::adapters::{Formatter, Linter, Position, ProjectLinter, Range, Severity};
     use crate::config::Config;
     use crate::fsx::{ExtensionRegistry, group_by_language};
 
@@ -379,5 +382,266 @@ mod tests {
 
         assert!(runs.is_empty());
         assert!(ruff.format_calls().is_empty());
+    }
+
+    #[test]
+    fn project_linter_runs_once_with_its_selected_language_scope() {
+        let project = Arc::new(FakeProjectLinter::new("deptry"));
+        let mut registry = AdapterRegistry::new();
+        registry.register_project_linter(
+            Language::Python,
+            Arc::clone(&project) as Arc<dyn ProjectLinter>,
+        );
+        registry.register_project_linter(
+            Language::Quarto,
+            Arc::clone(&project) as Arc<dyn ProjectLinter>,
+        );
+        let root = PathBuf::from("/workspace/project");
+        let groups = grouped(&[
+            "/workspace/project/a.py",
+            "/workspace/project/notebook.qmd",
+            "/workspace/project/model.R",
+        ]);
+        let provider = FakeToolPaths::default();
+        let config = Config::default();
+        let ctx = ToolCtx::new(&provider, &config, false);
+
+        let runs = lint_all_in_project(&registry, &groups, &root, true, false, &ctx);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].adapter, "deptry");
+        let calls = project.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].root, root);
+        assert_eq!(
+            calls[0].files,
+            paths(&["/workspace/project/a.py", "/workspace/project/notebook.qmd"])
+        );
+        assert!(calls[0].whole_project);
+    }
+
+    #[test]
+    fn project_linter_skips_empty_selected_language_buckets() {
+        let project = Arc::new(FakeProjectLinter::new("deptry"));
+        let mut registry = AdapterRegistry::new();
+        registry.register_project_linter(
+            Language::Python,
+            Arc::clone(&project) as Arc<dyn ProjectLinter>,
+        );
+        let groups = BTreeMap::from([
+            (Language::Python, Vec::new()),
+            (Language::R, paths(&["/workspace/project/model.R"])),
+        ]);
+        let provider = FakeToolPaths::default();
+        let config = Config::default();
+        let ctx = ToolCtx::new(&provider, &config, false);
+
+        let runs = lint_all_in_project(
+            &registry,
+            &groups,
+            Path::new("/workspace/project"),
+            false,
+            false,
+            &ctx,
+        );
+
+        assert!(runs.is_empty());
+        assert!(project.calls().is_empty());
+    }
+
+    #[test]
+    fn project_linters_are_never_dispatched_by_format() {
+        let project = Arc::new(FakeProjectLinter::new("deptry"));
+        let mut registry = AdapterRegistry::new();
+        registry.register_project_linter(
+            Language::Python,
+            Arc::clone(&project) as Arc<dyn ProjectLinter>,
+        );
+        let provider = FakeToolPaths::default();
+        let config = Config::default();
+        let ctx = ToolCtx::new(&provider, &config, false);
+
+        let runs = format_all(&registry, &grouped(&["a.py"]), false, &ctx);
+
+        assert!(runs.is_empty());
+        assert!(project.calls().is_empty());
+    }
+
+    #[test]
+    fn project_failure_keeps_adapter_diagnostics_and_results_are_name_sorted() {
+        let finding = Diagnostic {
+            path: PathBuf::from("/workspace/project/a.py"),
+            range: None,
+            code: Some("F401".to_string()),
+            severity: Severity::Warning,
+            message: "unused import".to_string(),
+            fixable: true,
+        };
+        let ruff = Arc::new(FakeAdapter::new("ruff").finding(vec![finding.clone()]));
+        let deptry = Arc::new(FakeProjectLinter::new("deptry").failing("deptry exploded"));
+        let mut registry = AdapterRegistry::new();
+        registry.register(Language::Python, ruff as Arc<dyn Adapter>);
+        registry.register_project_linter(Language::Python, deptry as Arc<dyn ProjectLinter>);
+        let provider = FakeToolPaths::default();
+        let config = Config::default();
+        let ctx = ToolCtx::new(&provider, &config, false);
+
+        let runs = lint_all_in_project(
+            &registry,
+            &grouped(&["/workspace/project/a.py"]),
+            Path::new("/workspace/project"),
+            false,
+            false,
+            &ctx,
+        );
+
+        assert_eq!(
+            runs.iter().map(|run| run.adapter).collect::<Vec<_>>(),
+            ["deptry", "ruff"]
+        );
+        assert!(
+            runs[0]
+                .result
+                .as_ref()
+                .expect_err("deptry fails")
+                .to_string()
+                .contains("deptry exploded")
+        );
+        assert_eq!(runs[1].result.as_ref().expect("ruff succeeds"), &[finding]);
+    }
+
+    #[test]
+    fn project_notes_are_data_and_do_not_turn_a_clean_result_into_an_error() {
+        let project = Arc::new(
+            FakeProjectLinter::new("deptry")
+                .returning(Vec::new(), &["skipped the Python dependency check"]),
+        );
+        let mut registry = AdapterRegistry::new();
+        registry.register_project_linter(Language::Python, project as Arc<dyn ProjectLinter>);
+        let provider = FakeToolPaths::default();
+        let config = Config::default();
+        let ctx = ToolCtx::new(&provider, &config, false);
+
+        let runs = lint_all_in_project(
+            &registry,
+            &grouped(&["/workspace/project/a.py"]),
+            Path::new("/workspace/project"),
+            true,
+            false,
+            &ctx,
+        );
+
+        assert_eq!(runs.len(), 1);
+        assert!(
+            runs[0]
+                .result
+                .as_ref()
+                .expect("note is not failure")
+                .is_empty()
+        );
+        assert_eq!(runs[0].notes, ["skipped the Python dependency check"]);
+    }
+
+    #[test]
+    fn fix_mode_finishes_file_adapters_before_project_linters_start() {
+        struct FixingAdapter {
+            events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        }
+
+        impl Formatter for FixingAdapter {
+            fn format(
+                &self,
+                files: &[PathBuf],
+                _check: bool,
+                _ctx: &ToolCtx,
+            ) -> anyhow::Result<FormatOutcome> {
+                Ok(FormatOutcome {
+                    processed: files.len(),
+                    changed: Vec::new(),
+                })
+            }
+        }
+
+        impl Linter for FixingAdapter {
+            fn lint(
+                &self,
+                _files: &[PathBuf],
+                fix: bool,
+                _ctx: &ToolCtx,
+            ) -> anyhow::Result<Vec<Diagnostic>> {
+                assert!(fix);
+                self.events
+                    .lock()
+                    .expect("events lock")
+                    .push("adapter-complete");
+                Ok(Vec::new())
+            }
+        }
+
+        impl Adapter for FixingAdapter {
+            fn name(&self) -> &'static str {
+                "ruff"
+            }
+        }
+
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let project = Arc::new(FakeProjectLinter::new("deptry").recording(Arc::clone(&events)));
+        let mut registry = AdapterRegistry::new();
+        registry.register(
+            Language::Python,
+            Arc::new(FixingAdapter {
+                events: Arc::clone(&events),
+            }),
+        );
+        registry.register_project_linter(Language::Python, project as Arc<dyn ProjectLinter>);
+        let provider = FakeToolPaths::default();
+        let config = Config::default();
+        let ctx = ToolCtx::new(&provider, &config, false);
+
+        lint_all_in_project(
+            &registry,
+            &grouped(&["/workspace/project/a.py"]),
+            Path::new("/workspace/project"),
+            true,
+            true,
+            &ctx,
+        );
+
+        assert_eq!(
+            *events.lock().expect("events lock"),
+            ["adapter-complete", "project"]
+        );
+    }
+
+    #[test]
+    fn project_scope_keeps_absolute_files_when_cwd_differs_from_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("project");
+        let cwd = root.join("nested");
+        let file = cwd.join("a.py");
+        let project = Arc::new(FakeProjectLinter::new("deptry"));
+        let mut registry = AdapterRegistry::new();
+        registry.register_project_linter(
+            Language::Python,
+            Arc::clone(&project) as Arc<dyn ProjectLinter>,
+        );
+        let provider = FakeToolPaths::default();
+        let config = Config::default();
+        let ctx = ToolCtx::new(&provider, &config, false);
+
+        lint_all_in_project(
+            &registry,
+            &grouped(&[file.to_str().expect("utf8 temp path")]),
+            &root,
+            false,
+            false,
+            &ctx,
+        );
+
+        let calls = project.calls();
+        assert_eq!(calls[0].root, root);
+        assert_eq!(calls[0].files, [file]);
+        assert!(calls[0].files[0].is_absolute());
+        assert!(!calls[0].whole_project);
     }
 }

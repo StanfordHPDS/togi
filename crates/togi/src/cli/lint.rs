@@ -158,6 +158,8 @@ fn run_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+    use togi_core::fsx::Language;
 
     #[test]
     fn a_clean_run_is_not_a_failure() {
@@ -200,5 +202,19 @@ mod tests {
     fn violations_and_tool_failures_combine() {
         let (message, _) = run_failure(2, 0, 1, false).expect("worst outcome");
         assert_eq!(message, "found 2 issues and 1 linter could not run");
+    }
+
+    #[test]
+    fn project_groups_make_cwd_relative_files_absolute_when_root_differs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("project");
+        let cwd = root.join("nested");
+        let groups = BTreeMap::from([(Language::Python, vec![PathBuf::from("src/example.py")])]);
+
+        let absolute = absolute_groups(&groups, &cwd);
+
+        assert_eq!(absolute[&Language::Python], [cwd.join("src/example.py")]);
+        assert!(absolute[&Language::Python][0].is_absolute());
+        assert_ne!(cwd, root);
     }
 }

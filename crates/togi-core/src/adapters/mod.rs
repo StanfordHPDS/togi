@@ -7,6 +7,7 @@
 //! source-level: implement [`Adapter`] and register it for its
 //! [`Language`](crate::fsx::Language) bucket in [`AdapterRegistry`].
 
+mod deptry;
 mod diagnostic;
 mod outcome;
 mod panache;
@@ -26,13 +27,14 @@ use crate::config::Config;
 use crate::term::HintExt;
 use crate::tools::{InstallContext, ToolSpec};
 
+pub use deptry::DeptryAdapter;
 pub use diagnostic::{Diagnostic, Position, Range, Severity};
 pub use outcome::FormatOutcome;
 pub use panache::PanacheAdapter;
 pub use python::RuffAdapter;
 pub use r::AirAdapter;
 pub use registry::AdapterRegistry;
-pub use runner::{format_all, lint_all};
+pub use runner::{format_all, lint_all, lint_all_in_project, lint_all_in_project_from_cwd};
 pub use sql::SqlFluffAdapter;
 
 /// Formats a batch of files with one underlying tool invocation.
@@ -52,6 +54,28 @@ pub trait Linter {
     /// Lint `files`, applying safe autofixes first when `fix` is set, and
     /// report the remaining findings.
     fn lint(&self, files: &[PathBuf], fix: bool, ctx: &ToolCtx) -> anyhow::Result<Vec<Diagnostic>>;
+}
+
+/// The files and project context supplied to a project-wide linter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectScope {
+    pub root: PathBuf,
+    pub files: Vec<PathBuf>,
+    pub whole_project: bool,
+}
+
+/// Findings and informational notes from a project-wide linter.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectLint {
+    pub diagnostics: Vec<Diagnostic>,
+    pub notes: Vec<String>,
+}
+
+/// A linter that analyzes a project scope once instead of a file batch.
+pub trait ProjectLinter: Send + Sync {
+    fn name(&self) -> &'static str;
+
+    fn lint_project(&self, scope: &ProjectScope, ctx: &ToolCtx) -> anyhow::Result<ProjectLint>;
 }
 
 /// One tool's adapter: both capabilities plus a stable name.
@@ -94,6 +118,11 @@ impl<'a> ToolCtx<'a> {
     pub fn tool_path(&self, tool: &str) -> anyhow::Result<PathBuf> {
         self.tools.tool_path(tool)
     }
+
+    /// The Python interpreter in a uv-managed tool's virtual environment.
+    pub fn tool_python(&self, tool: &str) -> anyhow::Result<PathBuf> {
+        self.tools.tool_python(tool)
+    }
 }
 
 /// Render one tool invocation — the program followed by its arguments,
@@ -122,6 +151,13 @@ pub(crate) fn log_command(ctx: &ToolCtx, program: &Path, args: &[OsString]) {
 /// threads.
 pub trait ToolPaths: Sync {
     fn tool_path(&self, tool: &str) -> anyhow::Result<PathBuf>;
+
+    fn tool_python(&self, tool: &str) -> anyhow::Result<PathBuf> {
+        Err(anyhow::anyhow!(
+            "the tool path provider cannot resolve the managed Python interpreter for `{tool}`"
+        ))
+        .hint("this is a togi bug; please report it")
+    }
 }
 
 /// The production [`ToolPaths`]: resolves through the managed tool cache,
@@ -158,6 +194,18 @@ impl ToolPaths for InstalledToolPaths<'_> {
         };
         crate::tools::ensure_installed(&spec, &self.config.tools, &ctx)
     }
+
+    fn tool_python(&self, tool: &str) -> anyhow::Result<PathBuf> {
+        let spec = ToolSpec::builtin(tool)
+            .ok_or_else(|| anyhow::anyhow!("no managed tool named `{tool}`"))
+            .hint("this is a bug in togi: an adapter asked for a tool it does not manage; please report it")?;
+        let ctx = InstallContext {
+            label: crate::tools::label_for(tool),
+            command: self.command,
+            verbose: self.verbose,
+        };
+        crate::tools::ensure_python(&spec, &self.config.tools, &ctx)
+    }
 }
 
 #[cfg(test)]
@@ -187,6 +235,37 @@ mod tests {
         assert_eq!(resolved, PathBuf::from("/fake/bin/ruff"));
         // The provider saw the request — nothing touched the real installer.
         assert_eq!(paths.requests(), vec!["ruff".to_string()]);
+    }
+
+    #[test]
+    fn tool_ctx_resolves_tool_interpreters_through_the_injected_provider() {
+        let paths = FakeToolPaths::with_python("deptry", "/fake/venv/bin/python");
+        let config = Config::default();
+        let ctx = ToolCtx::new(&paths, &config, false);
+
+        let resolved = ctx
+            .tool_python("deptry")
+            .expect("fake provider has deptry's interpreter");
+        assert_eq!(resolved, PathBuf::from("/fake/venv/bin/python"));
+        assert_eq!(paths.python_requests(), vec!["deptry".to_string()]);
+    }
+
+    #[test]
+    fn tool_paths_default_interpreter_error_has_a_hint() {
+        struct BinaryOnly;
+
+        impl ToolPaths for BinaryOnly {
+            fn tool_path(&self, tool: &str) -> anyhow::Result<PathBuf> {
+                Ok(PathBuf::from(tool))
+            }
+        }
+
+        let err = BinaryOnly
+            .tool_python("deptry")
+            .expect_err("binary-only providers cannot resolve interpreters");
+        let rendered = crate::term::render_error(&err, false);
+        assert!(rendered.contains("deptry"), "{rendered}");
+        assert!(rendered.contains("hint:"), "{rendered}");
     }
 
     #[test]

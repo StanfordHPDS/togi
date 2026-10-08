@@ -5,6 +5,7 @@
 //! releases) as part of cutting a togi release, not at runtime.
 
 pub const AIR: &str = "0.10.0";
+pub const DEPTRY: &str = "0.25.1";
 pub const RUFF: &str = "0.14.0";
 pub const PANACHE: &str = "2.60.0";
 pub const SQLFLUFF: &str = "3.4.0";
@@ -20,6 +21,7 @@ mod tests {
         // asset patterns and `uv tool install pkg==X.Y.Z`.
         for (name, version) in [
             ("air", AIR),
+            ("deptry", DEPTRY),
             ("ruff", RUFF),
             ("panache", PANACHE),
             ("sqlfluff", SQLFLUFF),

@@ -11,7 +11,10 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use crate::adapters::{Adapter, Diagnostic, FormatOutcome, Formatter, Linter, ToolCtx, ToolPaths};
+use crate::adapters::{
+    Adapter, Diagnostic, FormatOutcome, Formatter, Linter, ProjectLint, ProjectLinter,
+    ProjectScope, ToolCtx, ToolPaths,
+};
 
 /// One recorded `format` call: the batch and the `check` flag.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +168,69 @@ impl Adapter for FakeAdapter {
     }
 }
 
+/// A project linter fake that records each scope and returns scripted data.
+#[derive(Default)]
+pub(crate) struct FakeProjectLinter {
+    name: &'static str,
+    calls: Mutex<Vec<ProjectScope>>,
+    diagnostics: Vec<Diagnostic>,
+    notes: Vec<String>,
+    fails_with: Option<String>,
+    events: Option<std::sync::Arc<Mutex<Vec<&'static str>>>>,
+}
+
+impl FakeProjectLinter {
+    pub fn new(name: &'static str) -> FakeProjectLinter {
+        FakeProjectLinter {
+            name,
+            ..FakeProjectLinter::default()
+        }
+    }
+
+    pub fn returning(mut self, diagnostics: Vec<Diagnostic>, notes: &[&str]) -> Self {
+        self.diagnostics = diagnostics;
+        self.notes = notes.iter().map(|note| note.to_string()).collect();
+        self
+    }
+
+    pub fn failing(mut self, message: &str) -> Self {
+        self.fails_with = Some(message.to_string());
+        self
+    }
+
+    pub fn recording(mut self, events: std::sync::Arc<Mutex<Vec<&'static str>>>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    pub fn calls(&self) -> Vec<ProjectScope> {
+        self.calls.lock().expect("project calls lock").clone()
+    }
+}
+
+impl ProjectLinter for FakeProjectLinter {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn lint_project(&self, scope: &ProjectScope, _ctx: &ToolCtx) -> anyhow::Result<ProjectLint> {
+        self.calls
+            .lock()
+            .expect("project calls lock")
+            .push(scope.clone());
+        if let Some(events) = &self.events {
+            events.lock().expect("events lock").push("project");
+        }
+        if let Some(message) = &self.fails_with {
+            return Err(anyhow::anyhow!(message.clone()));
+        }
+        Ok(ProjectLint {
+            diagnostics: self.diagnostics.clone(),
+            notes: self.notes.clone(),
+        })
+    }
+}
+
 /// Records the highest number of overlapping calls, proving (or
 /// disproving) that adapters ran in parallel.
 #[derive(Default)]
@@ -200,14 +266,27 @@ impl Drop for GaugeGuard<'_> {
 #[derive(Default)]
 pub(crate) struct FakeToolPaths {
     paths: BTreeMap<String, PathBuf>,
+    python_paths: BTreeMap<String, PathBuf>,
     requests: Mutex<Vec<String>>,
+    python_requests: Mutex<Vec<String>>,
 }
 
 impl FakeToolPaths {
     pub fn with_tool(tool: &str, path: &str) -> FakeToolPaths {
         FakeToolPaths {
             paths: BTreeMap::from([(tool.to_string(), PathBuf::from(path))]),
+            python_paths: BTreeMap::new(),
             requests: Mutex::new(Vec::new()),
+            python_requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn with_python(tool: &str, path: &str) -> FakeToolPaths {
+        FakeToolPaths {
+            paths: BTreeMap::new(),
+            python_paths: BTreeMap::from([(tool.to_string(), PathBuf::from(path))]),
+            requests: Mutex::new(Vec::new()),
+            python_requests: Mutex::new(Vec::new()),
         }
     }
 
@@ -221,6 +300,13 @@ impl FakeToolPaths {
     pub fn requests(&self) -> Vec<String> {
         self.requests.lock().expect("requests lock").clone()
     }
+
+    pub fn python_requests(&self) -> Vec<String> {
+        self.python_requests
+            .lock()
+            .expect("python requests lock")
+            .clone()
+    }
 }
 
 impl ToolPaths for FakeToolPaths {
@@ -233,5 +319,16 @@ impl ToolPaths for FakeToolPaths {
             .get(tool)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("fake provider has no tool named `{tool}`"))
+    }
+
+    fn tool_python(&self, tool: &str) -> anyhow::Result<PathBuf> {
+        self.python_requests
+            .lock()
+            .expect("python requests lock")
+            .push(tool.to_string());
+        self.python_paths
+            .get(tool)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("fake provider has no Python for tool `{tool}`"))
     }
 }

@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Args, ValueEnum};
 
-use togi_core::adapters::{AdapterRegistry, Diagnostic, InstalledToolPaths, ToolCtx, lint_all};
+use togi_core::adapters::{
+    AdapterRegistry, Diagnostic, InstalledToolPaths, ToolCtx, lint_all_in_project_from_cwd,
+};
 use togi_core::config::{self, Layer};
 use togi_core::term::{self, HintExt};
 
@@ -68,11 +70,22 @@ pub fn run(args: LintArgs, global: &super::GlobalArgs) -> anyhow::Result<()> {
     let registry = AdapterRegistry::with_defaults();
     let provider = InstalledToolPaths::new(&loaded.config, "togi lint", global.verbose);
     let ctx = ToolCtx::new(&provider, &loaded.config, global.verbose);
-    let runs = lint_all(&registry, &discovered.groups, args.fix, &ctx);
+    let runs = lint_all_in_project_from_cwd(
+        &registry,
+        &discovered.groups,
+        &cwd,
+        &root,
+        args.paths.is_empty(),
+        args.fix,
+        &ctx,
+    );
 
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut failed = 0usize;
     for run in runs {
+        for note in &run.notes {
+            term::warn(note);
+        }
         match run.result {
             Ok(found) => diagnostics.extend(found),
             Err(err) => {

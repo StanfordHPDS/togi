@@ -152,6 +152,74 @@ impl UvToolInstaller {
         Ok(binary)
     }
 
+    /// Return the Python interpreter in a uv-managed tool's virtual
+    /// environment, installing the tool first when needed.
+    pub fn ensure_python(
+        &self,
+        spec: &ToolSpec,
+        version: &str,
+        ctx: &InstallContext,
+    ) -> anyhow::Result<PathBuf> {
+        let ToolKind::UvTool { package } = spec.kind else {
+            return Err(anyhow::anyhow!(
+                "`{}` is a GitHub release binary and has no managed Python interpreter",
+                spec.name
+            ))
+            .hint("this is a togi bug; please report it");
+        };
+
+        self.ensure_installed(spec, version, ctx)?;
+        let relative = match self.platform.os {
+            crate::tools::platform::Os::Windows => Path::new("Scripts").join("python.exe"),
+            crate::tools::platform::Os::Mac | crate::tools::platform::Os::Linux => {
+                PathBuf::from("bin/python")
+            }
+        };
+        let interpreter = self
+            .cache
+            .tool_dir(spec.name, version)
+            .join(VENVS_DIR)
+            .join(package)
+            .join(relative);
+        if !interpreter.is_file() {
+            return Err(anyhow::anyhow!(
+                "the managed `{}` install has no Python interpreter at `{}`",
+                spec.name,
+                interpreter.display()
+            ))
+            .hint("run `togi tools update`, or remove the tool with `togi tools clean` and retry");
+        }
+
+        let parent = interpreter
+            .parent()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "the managed Python interpreter path `{}` has no parent directory",
+                    interpreter.display()
+                )
+            })
+            .hint("this is a togi bug; please report it")?;
+        let parent = parent
+            .canonicalize()
+            .with_context(|| {
+                format!(
+                    "could not resolve the managed Python environment `{}`",
+                    parent.display()
+                )
+            })
+            .hint("check that the togi data directory is accessible and rerun the command")?;
+        let filename = interpreter
+            .file_name()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "the managed Python interpreter path `{}` has no filename",
+                    interpreter.display()
+                )
+            })
+            .hint("this is a togi bug; please report it")?;
+        Ok(parent.join(filename))
+    }
+
     /// Whether `binary` (plus its manifest) is already installed. The
     /// manifest is written last, so its presence means the install
     /// completed.
@@ -297,6 +365,27 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    fn deptry_spec() -> ToolSpec {
+        ToolSpec {
+            name: "deptry",
+            default_version: "0.25.1",
+            kind: ToolKind::UvTool { package: "deptry" },
+        }
+    }
+
+    fn github_spec() -> ToolSpec {
+        ToolSpec {
+            name: "air",
+            default_version: "0.10.0",
+            kind: ToolKind::GithubBinary {
+                repo: "posit-dev/air",
+                asset_pattern: "air-{arch}-{os}.{ext}",
+                checksum_pattern: None,
+            },
+        }
+    }
+
     fn ctx() -> InstallContext<'static> {
         InstallContext {
             label: "SQL linter",
@@ -329,6 +418,169 @@ printf 'fake sqlfluff' > "$UV_TOOL_BIN_DIR/sqlfluff"
 chmod +x "$UV_TOOL_BIN_DIR/sqlfluff""#,
             record = record.display()
         )
+    }
+
+    #[cfg(unix)]
+    fn deptry_uv_body(record: &Path, include_python: bool) -> String {
+        let python = if include_python {
+            r#"mkdir -p "$UV_TOOL_DIR/deptry/bin" "$UV_TOOL_DIR/deptry/Scripts"
+printf 'fake python' > "$UV_TOOL_DIR/deptry/bin/python"
+printf 'fake python' > "$UV_TOOL_DIR/deptry/Scripts/python.exe""#
+        } else {
+            ""
+        };
+        format!(
+            r#"record="{record}"
+echo run >> "$record"
+mkdir -p "$UV_TOOL_BIN_DIR"
+printf 'fake deptry' > "$UV_TOOL_BIN_DIR/deptry"
+printf 'fake deptry' > "$UV_TOOL_BIN_DIR/deptry.exe"
+chmod +x "$UV_TOOL_BIN_DIR/deptry" "$UV_TOOL_BIN_DIR/deptry.exe"
+{python}"#,
+            record = record.display()
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_python_installs_once_and_returns_the_unix_venv_interpreter() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let record = dir.path().join("runs.txt");
+        let uv = fake_uv(dir.path(), &deptry_uv_body(&record, true));
+        let cache = ToolCache::at(dir.path());
+        let installer = UvToolInstaller::with_uv_binary(cache.clone(), linux(), uv);
+
+        let first = installer
+            .ensure_python(&deptry_spec(), "0.25.1", &ctx())
+            .expect("install deptry and resolve python");
+        let second = installer
+            .ensure_python(&deptry_spec(), "0.25.1", &ctx())
+            .expect("reuse cached deptry interpreter");
+
+        let expected = cache
+            .tool_dir("deptry", "0.25.1")
+            .join(VENVS_DIR)
+            .join("deptry/bin")
+            .canonicalize()
+            .expect("canonical venv bin")
+            .join("python");
+        assert_eq!(first, expected);
+        assert_eq!(second, expected);
+        assert_eq!(
+            fs::read_to_string(record)
+                .expect("run record")
+                .lines()
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_python_normalizes_the_environment_without_resolving_the_python_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(dir.path().join("nested")).expect("create nested directory");
+        let cache_root = dir.path().join("nested").join("..");
+        let record = dir.path().join("runs.txt");
+        let uv = fake_uv(dir.path(), &deptry_uv_body(&record, true));
+        let cache = ToolCache::at(&cache_root);
+        let interpreter = cache
+            .tool_dir("deptry", "0.25.1")
+            .join(VENVS_DIR)
+            .join("deptry/bin/python");
+        let base_python = dir.path().join("base-python");
+        fs::write(&base_python, "base").expect("write base interpreter");
+        let installer = UvToolInstaller::with_uv_binary(cache, linux(), uv);
+
+        installer
+            .ensure_installed(&deptry_spec(), "0.25.1", &ctx())
+            .expect("install deptry");
+        fs::remove_file(&interpreter).expect("remove fake interpreter");
+        symlink(&base_python, &interpreter).expect("link venv interpreter");
+        let resolved = installer
+            .ensure_python(&deptry_spec(), "0.25.1", &ctx())
+            .expect("resolve deptry interpreter");
+
+        assert_eq!(
+            resolved.parent().expect("interpreter parent"),
+            interpreter
+                .parent()
+                .expect("raw interpreter parent")
+                .canonicalize()
+                .expect("canonical venv directory")
+        );
+        assert!(
+            resolved.is_symlink(),
+            "the final Python symlink is preserved"
+        );
+        assert_ne!(
+            resolved, base_python,
+            "the base interpreter is not returned"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_python_uses_the_windows_scripts_layout() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let record = dir.path().join("runs.txt");
+        let uv = fake_uv(dir.path(), &deptry_uv_body(&record, true));
+        let windows = Platform {
+            os: Os::Windows,
+            arch: Arch::X86_64,
+        };
+        let cache = ToolCache::at(dir.path());
+        let installer = UvToolInstaller::with_uv_binary(cache.clone(), windows, uv);
+
+        let python = installer
+            .ensure_python(&deptry_spec(), "0.25.1", &ctx())
+            .expect("install deptry and resolve Windows python");
+
+        assert_eq!(
+            python,
+            cache
+                .tool_dir("deptry", "0.25.1")
+                .join(VENVS_DIR)
+                .join("deptry/Scripts")
+                .canonicalize()
+                .expect("canonical venv Scripts")
+                .join("python.exe")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_python_errors_with_a_hint_when_the_interpreter_is_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let record = dir.path().join("runs.txt");
+        let uv = fake_uv(dir.path(), &deptry_uv_body(&record, false));
+        let installer = UvToolInstaller::with_uv_binary(ToolCache::at(dir.path()), linux(), uv);
+
+        let err = installer
+            .ensure_python(&deptry_spec(), "0.25.1", &ctx())
+            .expect_err("a completed tool install without python must fail");
+        let rendered = crate::term::render_error(&err, false);
+        assert!(rendered.contains("python"), "{rendered}");
+        assert!(rendered.contains("hint:"), "{rendered}");
+    }
+
+    #[test]
+    fn ensure_python_rejects_github_binaries_with_a_hint() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let installer = UvToolInstaller::with_uv_binary(
+            ToolCache::at(dir.path()),
+            linux(),
+            dir.path().join("uv"),
+        );
+
+        let err = installer
+            .ensure_python(&github_spec(), "0.10.0", &ctx())
+            .expect_err("GitHub binaries have no uv-managed interpreter");
+        let rendered = crate::term::render_error(&err, false);
+        assert!(rendered.contains("air"), "{rendered}");
+        assert!(rendered.contains("hint:"), "{rendered}");
     }
 
     #[cfg(unix)]
@@ -728,5 +980,31 @@ mod online_tests {
             "sqlfluff --version must report {}: {stdout}",
             spec.default_version
         );
+    }
+
+    /// Installs deptry into the private tool cache and imports it through
+    /// the virtual environment interpreter returned to adapters.
+    #[test]
+    #[ignore = "downloads real uv and deptry from the network"]
+    fn installs_real_deptry_and_imports_it_with_its_interpreter() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = ToolCache::at(dir.path());
+        let platform = Platform::current().expect("supported platform");
+        let spec = ToolSpec::builtin("deptry").expect("deptry is built in");
+        let ctx = InstallContext {
+            label: "Python dependency checker",
+            command: "togi lint",
+            verbose: true,
+        };
+
+        let python = UvToolInstaller::new(cache, platform, crate::tools::versions::UV.to_string())
+            .ensure_python(&spec, spec.default_version, &ctx)
+            .expect("bootstrap uv, install deptry, and resolve its interpreter");
+        let output = Command::new(&python)
+            .args(["-c", "import deptry"])
+            .output()
+            .expect("import deptry");
+
+        assert!(output.status.success(), "{output:?}");
     }
 }

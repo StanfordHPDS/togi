@@ -17,6 +17,7 @@ use predicates::prelude::*;
 /// Baked default versions (mirrors `src/tools/versions.rs`; drift fails
 /// the assertions below loudly).
 const AIR_DEFAULT: &str = "0.10.0";
+const DEPTRY_DEFAULT: &str = "0.25.1";
 const RUFF_DEFAULT: &str = "0.14.0";
 const PANACHE_DEFAULT: &str = "2.60.0";
 const SQLFLUFF_DEFAULT: &str = "3.4.0";
@@ -83,6 +84,7 @@ impl Sandbox {
     fn install_all_defaults(&self) {
         for (name, version) in [
             ("air", AIR_DEFAULT),
+            ("deptry", DEPTRY_DEFAULT),
             ("ruff", RUFF_DEFAULT),
             ("panache", PANACHE_DEFAULT),
             ("sqlfluff", SQLFLUFF_DEFAULT),
@@ -148,7 +150,9 @@ fn list_shows_baked_defaults_for_tools_not_installed() {
         .success()
         .stdout(
             predicate::str::contains("panache")
+                .and(predicate::str::contains("deptry"))
                 .and(predicate::str::contains("not installed"))
+                .and(predicate::str::contains(DEPTRY_DEFAULT))
                 .and(predicate::str::contains(PANACHE_DEFAULT))
                 .and(predicate::str::contains(RUFF_DEFAULT))
                 .and(predicate::str::contains(SQLFLUFF_DEFAULT))
@@ -243,6 +247,7 @@ fn update_installs_missing_tools_from_scratch() {
     let sb = Sandbox::new();
     // Everything cached except air.
     for (name, version) in [
+        ("deptry", DEPTRY_DEFAULT),
         ("ruff", RUFF_DEFAULT),
         ("panache", PANACHE_DEFAULT),
         ("sqlfluff", SQLFLUFF_DEFAULT),

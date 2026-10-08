@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::adapters::{Adapter, RuffAdapter};
+use crate::adapters::{Adapter, DeptryAdapter, ProjectLinter, RuffAdapter};
 use crate::fsx::Language;
 
 /// Maps [`Language`] buckets (from the fsx extension registry) to the
@@ -15,6 +15,7 @@ use crate::fsx::Language;
 #[derive(Default)]
 pub struct AdapterRegistry {
     map: BTreeMap<Language, Arc<dyn Adapter>>,
+    project_linters: BTreeMap<Language, Vec<Arc<dyn ProjectLinter>>>,
 }
 
 impl AdapterRegistry {
@@ -29,6 +30,7 @@ impl AdapterRegistry {
     pub fn with_defaults() -> AdapterRegistry {
         let mut registry = AdapterRegistry::new();
         registry.register(Language::Python, Arc::new(RuffAdapter));
+        registry.register_project_linter(Language::Python, Arc::new(DeptryAdapter::new()));
         registry.register(Language::R, Arc::new(crate::adapters::AirAdapter));
         let panache: Arc<dyn Adapter> = Arc::new(crate::adapters::PanacheAdapter::new());
         registry.register(Language::Quarto, Arc::clone(&panache));
@@ -50,12 +52,29 @@ impl AdapterRegistry {
     pub fn adapter_for(&self, language: Language) -> Option<&Arc<dyn Adapter>> {
         self.map.get(&language)
     }
+
+    /// Register a project-wide linter for a language bucket.
+    pub fn register_project_linter(&mut self, language: Language, linter: Arc<dyn ProjectLinter>) {
+        self.project_linters
+            .entry(language)
+            .or_default()
+            .push(linter);
+    }
+
+    /// Project-wide linters registered for `language`.
+    pub fn project_linters_for(&self, language: Language) -> &[Arc<dyn ProjectLinter>] {
+        self.project_linters
+            .get(&language)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::test_support::FakeAdapter;
+    use crate::adapters::test_support::{FakeAdapter, FakeProjectLinter};
+    use crate::adapters::{Adapter, ProjectLinter};
 
     #[test]
     fn with_defaults_routes_python_to_the_ruff_adapter() {
@@ -131,6 +150,62 @@ mod tests {
         for language in [Language::Quarto, Language::Markdown] {
             let adapter = registry.adapter_for(language).expect("registered");
             assert_eq!(adapter.name(), "panache");
+        }
+    }
+
+    #[test]
+    fn project_linters_are_registered_separately_from_file_adapters() {
+        let deptry: Arc<dyn ProjectLinter> = Arc::new(FakeProjectLinter::new("deptry"));
+        let ruff: Arc<dyn Adapter> = Arc::new(FakeAdapter::new("ruff"));
+        let mut registry = AdapterRegistry::new();
+
+        registry.register(Language::Python, Arc::clone(&ruff));
+        registry.register_project_linter(Language::Python, Arc::clone(&deptry));
+
+        assert!(Arc::ptr_eq(
+            registry
+                .adapter_for(Language::Python)
+                .expect("ruff adapter"),
+            &ruff
+        ));
+        let project = registry.project_linters_for(Language::Python);
+        assert_eq!(project.len(), 1);
+        assert!(Arc::ptr_eq(&project[0], &deptry));
+    }
+
+    #[test]
+    fn one_project_linter_can_be_shared_across_language_buckets() {
+        let linter: Arc<dyn ProjectLinter> = Arc::new(FakeProjectLinter::new("shared"));
+        let mut registry = AdapterRegistry::new();
+        registry.register_project_linter(Language::Python, Arc::clone(&linter));
+        registry.register_project_linter(Language::Quarto, Arc::clone(&linter));
+
+        assert!(Arc::ptr_eq(
+            &registry.project_linters_for(Language::Python)[0],
+            &registry.project_linters_for(Language::Quarto)[0]
+        ));
+    }
+
+    #[test]
+    fn defaults_register_only_the_python_dependency_linter() {
+        let registry = AdapterRegistry::with_defaults();
+        for language in [
+            Language::R,
+            Language::Python,
+            Language::Quarto,
+            Language::Markdown,
+            Language::Sql,
+        ] {
+            let names: Vec<_> = registry
+                .project_linters_for(language)
+                .iter()
+                .map(|linter| linter.name())
+                .collect();
+            if language == Language::Python {
+                assert_eq!(names, ["deptry"]);
+            } else {
+                assert!(names.is_empty());
+            }
         }
     }
 }

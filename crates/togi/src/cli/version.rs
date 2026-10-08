@@ -62,6 +62,10 @@ mod tests {
             report.contains(&format!("ruff {}", versions::RUFF)),
             "{report}"
         );
+        assert!(
+            report.contains(&format!("deptry {}", versions::DEPTRY)),
+            "{report}"
+        );
         assert!(report.contains(&format!("uv {}", versions::UV)), "{report}");
     }
 }

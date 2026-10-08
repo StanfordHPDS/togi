@@ -3,6 +3,19 @@
 togi works with **zero configuration**. Every key below is optional and has a
 built-in default; a config file only *overrides* those defaults.
 
+Project selection of togi itself lives in `.togi-version`, separate from this
+configuration. Run `togi pin` to write the effective version, `togi pin X.Y.Z`
+to download, verify, and select an exact release, or `togi unpin` to remove
+the selection. `togi --with-version X.Y.Z lint` overrides the file for one
+invocation without changing it.
+
+From a subdirectory, togi uses the closest `.togi-version` and stops searching
+at the Git root. When creating a new file, `togi pin` uses the nearest
+`togi.toml`, then the Git root, then the working directory. Ordinary unpinned
+commands use the installed entry point without checking the network. Cached
+selected releases work offline; selecting an uncached release needs network
+access once.
+
 ## Where config lives and how it layers
 
 togi reads configuration from two files:

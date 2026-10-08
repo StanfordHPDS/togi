@@ -14,6 +14,7 @@ struct Sandbox {
     project: PathBuf,
     data: PathBuf,
     config: PathBuf,
+    process_temp: PathBuf,
 }
 
 impl Sandbox {
@@ -22,13 +23,16 @@ impl Sandbox {
         let project = temp.path().join("project");
         let data = temp.path().join("data");
         let config = temp.path().join("config");
+        let process_temp = temp.path().join("tmp");
         fs::create_dir_all(project.join(".git")).expect("create repository marker");
         fs::create_dir_all(&config).expect("create config directory");
+        fs::create_dir_all(&process_temp).expect("create process temp directory");
         Self {
             _temp: temp,
             project,
             data,
             config,
+            process_temp,
         }
     }
 
@@ -38,6 +42,9 @@ impl Sandbox {
             .current_dir(&self.project)
             .env("TOGI_DATA_DIR", &self.data)
             .env("TOGI_CONFIG_DIR", &self.config)
+            .env("TMPDIR", &self.process_temp)
+            .env("TMP", &self.process_temp)
+            .env("TEMP", &self.process_temp)
             .env("TOGI_RELEASE_BASE_URL", "http://127.0.0.1:9")
             .env("TOGI_GITHUB_API_BASE_URL", "http://127.0.0.1:9");
         command
@@ -57,7 +64,7 @@ impl Sandbox {
 use std::env;
 use std::fs;
 use std::io::{self, Read};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
 fn main() -> ExitCode {
     let record = env::var_os("TOGI_PROBE_RECORD").expect("record path");
@@ -66,11 +73,14 @@ fn main() -> ExitCode {
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     let value = env::var("TOGI_PROBE_VALUE").expect("forwarded environment");
-    let cwd = env::current_dir().expect("cwd");
+    let cwd = env::current_dir().expect("cwd").canonicalize().expect("canonical cwd");
     let mut stdin = String::new();
     io::stdin().read_to_string(&mut stdin).expect("read stdin");
     fs::write(record, format!("version={}\ncwd={}\nenv={}\nstdin={stdin:?}\nargs={args:?}\n", env!("TOGI_PROBE_VERSION"), cwd.display(), value))
         .expect("write record");
+    if env::var_os("TOGI_PROBE_SIGNAL").is_some() {
+        let _ = Command::new("sh").args(["-c", "kill -TERM $PPID"]).status();
+    }
     print!("probe stdout");
     eprint!("probe stderr");
     let code = env::var("TOGI_PROBE_EXIT")
@@ -156,6 +166,31 @@ fn explicit_pin_normalizes_a_leading_v_and_repairs_a_malformed_lock() {
         fs::read_to_string(sandbox.project.join(".togi-version")).unwrap(),
         "7.8.9\n"
     );
+}
+
+#[test]
+fn override_can_supply_the_version_to_pin_and_conflicts_are_actionable() {
+    let sandbox = Sandbox::new();
+    sandbox.install_probe(SELECTED_VERSION);
+    sandbox.pin("malformed\n");
+
+    sandbox
+        .command()
+        .args(["--with-version", SELECTED_VERSION, "pin"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(sandbox.project.join(".togi-version")).unwrap(),
+        "7.8.9\n"
+    );
+
+    sandbox
+        .command()
+        .args(["--with-version", SELECTED_VERSION, "pin", "4.5.6"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("conflicting").and(predicate::str::contains("hint:")));
 }
 
 #[test]
@@ -310,6 +345,120 @@ fn exact_override_precedes_the_lock_and_applies_before_clap_version_handling() {
 }
 
 #[test]
+fn inherited_direct_marker_still_honors_a_new_exact_override() {
+    let sandbox = Sandbox::new();
+    sandbox.install_probe(SELECTED_VERSION);
+    let record = sandbox._temp.path().join("marker-record");
+    let current_command = Command::cargo_bin("togi").expect("togi binary");
+    let current = PathBuf::from(current_command.get_program())
+        .canonicalize()
+        .expect("canonical togi binary");
+
+    sandbox
+        .command()
+        .env("__TOGI_SELECTED_VERSION", env!("CARGO_PKG_VERSION"))
+        .env("__TOGI_SELECTED_EXE", current)
+        .env("TOGI_PROBE_RECORD", &record)
+        .env("TOGI_PROBE_VALUE", "present")
+        .env("TOGI_PROBE_EXIT", "0")
+        .args(["--with-version", SELECTED_VERSION, "--version"])
+        .assert()
+        .success()
+        .stdout("probe stdout");
+
+    assert!(
+        fs::read_to_string(record)
+            .unwrap()
+            .contains("version=7.8.9")
+    );
+}
+
+#[test]
+fn dispatch_token_is_consumed_only_by_the_immediate_selected_child() {
+    let sandbox = Sandbox::new();
+    sandbox.install_probe(SELECTED_VERSION);
+    sandbox.pin(&format!("{SELECTED_VERSION}\n"));
+    let record = sandbox._temp.path().join("token-record");
+    let current_command = Command::cargo_bin("togi").expect("togi binary");
+    let current = PathBuf::from(current_command.get_program())
+        .canonicalize()
+        .expect("canonical togi binary");
+    let token = tempfile::Builder::new()
+        .prefix(".togi-dispatch-")
+        .tempfile_in(&sandbox.process_temp)
+        .expect("create dispatch token");
+    let (_file, token_path) = token.keep().expect("keep dispatch token");
+    let token_name = token_path.file_name().expect("token filename");
+
+    let marked = || {
+        let mut command = sandbox.command();
+        command
+            .env("__TOGI_SELECTED_VERSION", env!("CARGO_PKG_VERSION"))
+            .env("__TOGI_SELECTED_EXE", &current)
+            .env("__TOGI_SELECTED_TOKEN", token_name)
+            .env("TOGI_PROBE_RECORD", &record)
+            .env("TOGI_PROBE_VALUE", "present")
+            .env("TOGI_PROBE_EXIT", "0")
+            .arg("version");
+        command
+    };
+
+    marked()
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+    assert!(
+        !token_path.exists(),
+        "the immediate child consumes the token"
+    );
+    assert!(
+        !record.exists(),
+        "the immediate child bypasses the project lock"
+    );
+
+    marked()
+        .assert()
+        .success()
+        .stdout("probe stdout")
+        .stderr("probe stderr");
+    assert!(
+        fs::read_to_string(record)
+            .unwrap()
+            .contains("version=7.8.9")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unconsumed_probe_tokens_stay_in_the_sandbox_temp_directory() {
+    let sandbox = Sandbox::new();
+    sandbox.install_probe(SELECTED_VERSION);
+    sandbox.pin(&format!("{SELECTED_VERSION}\n"));
+    let record = sandbox._temp.path().join("contained-token-record");
+
+    sandbox
+        .command()
+        .env("TOGI_PROBE_RECORD", &record)
+        .env("TOGI_PROBE_VALUE", "present")
+        .env("TOGI_PROBE_EXIT", "0")
+        .arg("version")
+        .assert()
+        .success();
+
+    let tokens: Vec<_> = fs::read_dir(&sandbox.process_temp)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".togi-dispatch-"))
+        })
+        .collect();
+    assert_eq!(tokens.len(), 1, "{tokens:?}");
+    assert_eq!(tokens[0].parent(), Some(sandbox.process_temp.as_path()));
+}
+
+#[test]
 fn cached_dispatch_preserves_process_inputs_and_outputs() {
     let sandbox = Sandbox::new();
     sandbox.install_probe(SELECTED_VERSION);
@@ -333,8 +482,9 @@ fn cached_dispatch_preserves_process_inputs_and_outputs() {
     drop(output);
 
     let recorded = fs::read_to_string(record).expect("read probe record");
+    let expected_cwd = nested.canonicalize().expect("canonical nested directory");
     assert!(
-        recorded.contains(&format!("cwd={}", nested.display())),
+        recorded.contains(&format!("cwd={}", expected_cwd.display())),
         "{recorded}"
     );
     assert!(recorded.contains("env=forwarded value"), "{recorded}");
@@ -344,6 +494,29 @@ fn cached_dispatch_preserves_process_inputs_and_outputs() {
             .contains("args=[\"lint\", \"--\", \"path with spaces.py\", \"\", \"--with-version\"]"),
         "{recorded}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn cached_dispatch_preserves_signal_termination() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let sandbox = Sandbox::new();
+    sandbox.install_probe(SELECTED_VERSION);
+    sandbox.pin(&format!("{SELECTED_VERSION}\n"));
+    let record = sandbox._temp.path().join("signal-record");
+
+    let output = sandbox
+        .command()
+        .env("TOGI_PROBE_RECORD", &record)
+        .env("TOGI_PROBE_VALUE", "present")
+        .env("TOGI_PROBE_EXIT", "0")
+        .env("TOGI_PROBE_SIGNAL", "1")
+        .arg("version")
+        .output()
+        .expect("run selected probe");
+
+    assert_eq!(output.status.signal(), Some(15));
 }
 
 #[test]

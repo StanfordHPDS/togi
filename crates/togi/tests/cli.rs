@@ -40,6 +40,8 @@ help_snapshot!(help_tools_clean, "tools", "clean");
 help_snapshot!(help_completions, "completions");
 help_snapshot!(help_version, "version");
 help_snapshot!(help_upgrade, "upgrade");
+help_snapshot!(help_pin, "pin");
+help_snapshot!(help_unpin, "unpin");
 
 #[test]
 fn root_help_advertises_the_fmt_alias() {

@@ -15,6 +15,9 @@ Arguments:
           [possible values: bash, elvish, fish, powershell, zsh]
 
 Options:
+      --with-version <VERSION>
+          Run using an exact togi release for this invocation
+
   -v, --verbose
           Show more detail (underlying commands, tool names)
 

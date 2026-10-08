@@ -227,7 +227,7 @@ fn normalize_tag(tag: &str) -> String {
 
 /// The [`ToolSpec`] describing togi's own release artifacts, so the shared
 /// downloader resolves and verifies them exactly like a managed tool.
-fn self_spec() -> ToolSpec {
+pub(crate) fn self_spec() -> ToolSpec {
     ToolSpec {
         name: BINARY_NAME,
         default_version: env!("CARGO_PKG_VERSION"),
@@ -326,7 +326,7 @@ impl SelfReplacer for ReleaseReplacer {
             command: "togi upgrade",
             verbose: self.verbose,
         };
-        let archive = downloader.fetch_archive(&spec, version, &ctx, staging.path())?;
+        let archive = downloader.fetch_verified_archive(&spec, version, &ctx, staging.path())?;
 
         let asset = spec
             .asset_name(platform, version)

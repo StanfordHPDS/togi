@@ -9,6 +9,9 @@ For each managed tool, resolves the wanted version (config pin, else this releas
 Usage: togi tools update [OPTIONS]
 
 Options:
+      --with-version <VERSION>
+          Run using an exact togi release for this invocation
+
   -v, --verbose
           Show more detail (underlying commands, tool names)
 

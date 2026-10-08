@@ -115,6 +115,27 @@ togi upgrade                       # replace this binary with the latest release
 togi completions zsh               # print a completion script for your shell
 ```
 
+Ordinary commands use the installed togi entry point and never check the
+network for a newer togi release. Your package manager or `togi upgrade`
+refreshes that entry point. To keep a project on an exact release, commit its
+version selection:
+
+```sh
+togi pin                 # write the effective version to .togi-version
+togi pin 0.1.1           # download, verify, and select an exact release
+togi --with-version 0.1.1 lint
+togi unpin               # return to the installed entry point
+```
+
+The closest `.togi-version` from the working directory wins, stopping at the
+Git root. `togi pin` writes beside an existing lock; otherwise it uses the
+nearest `togi.toml`, then the Git root, then the working directory. Pinned and
+previously downloaded versions work offline. The first selection of another
+exact version needs network access. Version selection freezes togi and its
+built-in managed-tool defaults, while project `[tools]` overrides continue to
+apply. It does not freeze the operating system, external services, or
+uncommitted user configuration.
+
 Exit codes: `0` success, `1` violations found / changes needed / a tool
 failed, `2` usage error.
 

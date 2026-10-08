@@ -145,7 +145,27 @@ impl Downloader {
         version: &str,
         ctx: &InstallContext,
     ) -> anyhow::Result<PathBuf> {
-        let ToolKind::GithubBinary { repo, .. } = spec.kind else {
+        self.ensure_installed_with_policy(spec, version, ctx, false)
+    }
+
+    /// Install a release only when its checksum is published and verified.
+    pub fn ensure_verified_installed(
+        &self,
+        spec: &ToolSpec,
+        version: &str,
+        ctx: &InstallContext,
+    ) -> anyhow::Result<PathBuf> {
+        self.ensure_installed_with_policy(spec, version, ctx, true)
+    }
+
+    fn ensure_installed_with_policy(
+        &self,
+        spec: &ToolSpec,
+        version: &str,
+        ctx: &InstallContext,
+        require_checksum: bool,
+    ) -> anyhow::Result<PathBuf> {
+        let ToolKind::GithubBinary { .. } = spec.kind else {
             // Internal misrouting, not a user mistake — but still degrade
             // to a clear error rather than a panic.
             return Err(anyhow::anyhow!(
@@ -156,7 +176,7 @@ impl Downloader {
         };
 
         let binary = self.cache.binary_path(spec.name, version, self.platform);
-        if self.is_installed(spec.name, version, &binary) {
+        if self.is_installed(spec.name, version, &binary, require_checksum) {
             return Ok(binary);
         }
 
@@ -167,7 +187,7 @@ impl Downloader {
         let _guard = lock.exclusive()?;
 
         // Another process may have finished the install while we waited.
-        if self.is_installed(spec.name, version, &binary) {
+        if self.is_installed(spec.name, version, &binary, require_checksum) {
             return Ok(binary);
         }
 
@@ -184,7 +204,7 @@ impl Downloader {
                 .hint("remove the directory by hand, or run `togi tools clean`")?;
         }
 
-        self.install(spec, repo, version, ctx, &name_dir, &tool_dir)?;
+        self.install(spec, version, ctx, &name_dir, &tool_dir, require_checksum)?;
         Ok(binary)
     }
 
@@ -215,15 +235,63 @@ impl Downloader {
         let message = fetch_message(ctx.label, spec.name, version, ctx.verbose);
         let (_url, tag, actual_sha256) =
             self.download_archive(spec, repo, version, &asset, &archive_path, &message, ctx)?;
-        self.verify_checksum(spec, repo, version, &tag, &asset, &actual_sha256, ctx)?;
+        self.verify_checksum(
+            spec,
+            repo,
+            version,
+            &tag,
+            &asset,
+            &actual_sha256,
+            ctx,
+            false,
+        )?;
+        Ok(archive_path)
+    }
+
+    /// Download and verify an archive, failing when the release does not
+    /// publish a checksum for the requested asset.
+    pub fn fetch_verified_archive(
+        &self,
+        spec: &ToolSpec,
+        version: &str,
+        ctx: &InstallContext,
+        dest_dir: &Path,
+    ) -> anyhow::Result<PathBuf> {
+        let ToolKind::GithubBinary { repo, .. } = spec.kind else {
+            return Err(anyhow::anyhow!("`{}` is not a release binary", spec.name))
+                .hint("this is a togi bug; please report it");
+        };
+        let asset = spec
+            .asset_name(self.platform, version)
+            .expect("GithubBinary specs always resolve an asset name");
+        let archive_path = dest_dir.join(&asset);
+        let message = fetch_message(ctx.label, spec.name, version, ctx.verbose);
+        let (_url, tag, actual_sha256) =
+            self.download_archive(spec, repo, version, &asset, &archive_path, &message, ctx)?;
+        self.verify_checksum(spec, repo, version, &tag, &asset, &actual_sha256, ctx, true)?;
         Ok(archive_path)
     }
 
     /// Whether `binary` (plus its manifest) is already installed. The
     /// manifest is written last, inside the same atomic rename, so its
     /// presence means the install completed.
-    fn is_installed(&self, name: &str, version: &str, binary: &Path) -> bool {
-        binary.is_file() && self.cache.manifest_path(name, version).is_file()
+    fn is_installed(
+        &self,
+        name: &str,
+        version: &str,
+        binary: &Path,
+        require_checksum: bool,
+    ) -> bool {
+        if !binary.is_file() {
+            return false;
+        }
+        let manifest_path = self.cache.manifest_path(name, version);
+        if !require_checksum {
+            return manifest_path.is_file();
+        }
+        Manifest::load(&manifest_path).is_ok_and(|manifest| {
+            manifest.version == version && manifest.checksum.is_some_and(|sum| !sum.is_empty())
+        })
     }
 
     /// Download, verify, extract, and atomically move one tool version
@@ -231,12 +299,16 @@ impl Downloader {
     fn install(
         &self,
         spec: &ToolSpec,
-        repo: &str,
         version: &str,
         ctx: &InstallContext,
         name_dir: &Path,
         tool_dir: &Path,
+        require_checksum: bool,
     ) -> anyhow::Result<()> {
+        let ToolKind::GithubBinary { repo, .. } = spec.kind else {
+            return Err(anyhow::anyhow!("`{}` is not a release binary", spec.name))
+                .hint("this is a togi bug; please report it");
+        };
         let asset = spec
             .asset_name(self.platform, version)
             .expect("GithubBinary specs always resolve an asset name");
@@ -259,8 +331,16 @@ impl Downloader {
         let (url, tag, actual_sha256) =
             self.download_archive(spec, repo, version, &asset, &archive_path, &message, ctx)?;
 
-        let checksum =
-            self.verify_checksum(spec, repo, version, &tag, &asset, &actual_sha256, ctx)?;
+        let checksum = self.verify_checksum(
+            spec,
+            repo,
+            version,
+            &tag,
+            &asset,
+            &actual_sha256,
+            ctx,
+            require_checksum,
+        )?;
 
         let install_dir = staging.path().join("install");
         fs::create_dir(&install_dir).context("could not create the install staging directory")?;
@@ -359,6 +439,7 @@ impl Downloader {
         asset: &str,
         actual_sha256: &str,
         ctx: &InstallContext,
+        required: bool,
     ) -> anyhow::Result<Option<String>> {
         let skip = |reason: &str| {
             term::warn(&format!(
@@ -367,6 +448,13 @@ impl Downloader {
             ));
         };
         let Some(checksum_asset) = spec.checksum_asset_name(self.platform, version) else {
+            if required {
+                return Err(anyhow::anyhow!(
+                    "the {} {version} release publishes no checksum for `{asset}`",
+                    spec.name
+                ))
+                .hint("use a release that publishes a checksum and retry");
+            }
             skip("this tool publishes no checksums");
             return Ok(None);
         };
@@ -381,6 +469,13 @@ impl Downloader {
             // any other status (403 rate limit, 5xx) is transient and must
             // not quietly downgrade to an unverified install.
             Err(ureq::Error::StatusCode(404)) => {
+                if required {
+                    return Err(anyhow::anyhow!(
+                        "the {} {version} release publishes no checksum for `{asset}`",
+                        spec.name
+                    ))
+                    .hint("use a release that publishes a checksum and retry");
+                }
                 skip("this release publishes no checksum asset");
                 return Ok(None);
             }
@@ -1131,6 +1226,59 @@ mod tests {
             .fetch_archive(&spec(), "1.2.3", &ctx(), dir.path())
             .expect_err("checksum mismatch must fail");
         assert!(err.to_string().contains("sha256 mismatch"), "{err}");
+    }
+
+    #[test]
+    fn verified_archive_requires_a_published_checksum() {
+        let archive = targz_with("tool-1.2.3/bin/tool", FAKE_BINARY);
+        let server = FixtureServer::serve(HashMap::from([(ARCHIVE_PATH.to_string(), archive)]));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let downloader = downloader_at(&server, &dir.path().join("cache"), linux());
+
+        let err = downloader
+            .fetch_verified_archive(&spec_without_checksums(), "1.2.3", &ctx(), dir.path())
+            .expect_err("verified installs require a checksum");
+        assert!(err.to_string().contains("publishes no checksum"), "{err}");
+    }
+
+    #[test]
+    fn verified_install_without_checksum_publishes_no_completed_directory() {
+        let archive = targz_with("tool-1.2.3/tool", FAKE_BINARY);
+        let server = FixtureServer::serve(HashMap::from([(ARCHIVE_PATH.to_string(), archive)]));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = ToolCache::at(dir.path());
+        let downloader = Downloader::at_base_url(cache.clone(), linux(), server.base_url.clone());
+
+        downloader
+            .ensure_verified_installed(&spec(), "1.2.3", &ctx())
+            .expect_err("verified installs require the published checksum asset");
+
+        assert!(!cache.tool_dir("tool", "1.2.3").exists());
+    }
+
+    #[test]
+    fn verified_install_repairs_an_invalid_cached_manifest_under_the_lock() {
+        let archive = targz_with("tool-1.2.3/tool", FAKE_BINARY);
+        let server = FixtureServer::serve(release_routes(&archive));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = ToolCache::at(dir.path());
+        let install = cache.tool_dir("tool", "1.2.3");
+        fs::create_dir_all(&install).unwrap();
+        fs::write(install.join("tool"), b"stale").unwrap();
+        Manifest::new("wrong".to_string(), "stale".to_string(), None)
+            .save(&install.join("manifest.json"))
+            .unwrap();
+        let downloader = Downloader::at_base_url(cache.clone(), linux(), server.base_url.clone());
+
+        let binary = downloader
+            .ensure_verified_installed(&spec(), "1.2.3", &ctx())
+            .expect("invalid cache should be replaced");
+
+        assert_eq!(fs::read(binary).unwrap(), FAKE_BINARY);
+        let manifest = Manifest::load(&cache.manifest_path("tool", "1.2.3")).unwrap();
+        assert_eq!(manifest.version, "1.2.3");
+        assert!(manifest.checksum.is_some());
+        assert_eq!(server.hits().len(), 2);
     }
 
     #[test]

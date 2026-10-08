@@ -296,6 +296,18 @@ mod tests {
     }
 
     #[test]
+    fn builtin_panache_uses_the_shared_checksum_list() {
+        let spec = ToolSpec::builtin("panache").expect("panache");
+        for platform in Platform::ALL {
+            assert_eq!(
+                spec.checksum_asset_name(platform, spec.default_version),
+                Some("SHA256SUMS".to_string()),
+                "{platform:?}"
+            );
+        }
+    }
+
+    #[test]
     fn builtin_sqlfluff_installs_via_uv() {
         let spec = ToolSpec::builtin("sqlfluff").expect("sqlfluff");
         assert_eq!(spec.default_version, versions::SQLFLUFF);

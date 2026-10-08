@@ -35,4 +35,9 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn panache_defaults_to_the_safe_fix_release() {
+        assert_eq!(PANACHE, "3.14.0");
+    }
 }

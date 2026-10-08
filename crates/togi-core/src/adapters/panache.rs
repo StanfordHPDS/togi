@@ -1152,4 +1152,42 @@ mod online_tests {
             "air reformatted the embedded R chunk:\n{formatted}"
         );
     }
+
+    /// Downloads the real pinned panache and Ruff releases and verifies
+    /// that ordinary lint fixes do not apply Ruff edits marked unsafe.
+    #[test]
+    #[ignore = "downloads real releases from GitHub"]
+    fn lint_fix_preserves_a_pandas_series_comparison() {
+        const DOCUMENT: &str = "\
+```{python}\n\
+import pandas as pd\n\
+\n\
+df = pd.DataFrame({\"a\": [True, False, None]})\n\
+x = df[df[\"a\"] != True]\n\
+```\n";
+
+        let cache = tempfile::tempdir().expect("cache dir");
+        let project = tempfile::tempdir().expect("project dir");
+        let document = project.path().join("analysis.qmd");
+        std::fs::write(&document, DOCUMENT).expect("write qmd");
+
+        let provider = DownloadedTools {
+            cache_root: cache.path().to_path_buf(),
+        };
+        let config = Config::default();
+        let ctx = ToolCtx::new(&provider, &config, false);
+        let adapter = PanacheAdapter::with_config_search(
+            project.path(),
+            &project.path().join("no-user-config.toml"),
+        );
+
+        adapter
+            .lint(std::slice::from_ref(&document), true, &ctx)
+            .expect("real panache applies safe lint fixes");
+
+        let fixed = std::fs::read_to_string(&document).expect("read back");
+        assert_eq!(fixed, DOCUMENT, "plain --fix must not apply unsafe edits");
+        assert!(fixed.contains("x = df[df[\"a\"] != True]"));
+        assert!(!fixed.contains("x = df[not df[\"a\"]]"));
+    }
 }

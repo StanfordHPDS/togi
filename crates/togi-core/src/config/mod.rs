@@ -23,8 +23,15 @@ use crate::term::HintExt;
 pub struct Config {
     pub format: FileSelection,
     pub lint: FileSelection,
+    pub python: PythonConfig,
     pub sql: SqlConfig,
     pub tools: ToolsConfig,
+}
+
+/// `[python]`: Python-specific lint behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonConfig {
+    pub dependencies: bool,
 }
 
 /// `[format]` / `[lint]`: which languages to include and what to skip.
@@ -65,6 +72,7 @@ impl Default for Config {
                 languages: strings(&["r", "python", "quarto", "sql"]),
                 exclude: Vec::new(),
             },
+            python: PythonConfig { dependencies: true },
             sql: SqlConfig {
                 dialect: "bigquery".to_string(),
             },
@@ -84,6 +92,7 @@ pub struct Layer {
     pub format_exclude: Option<Vec<String>>,
     pub lint_languages: Option<Vec<String>>,
     pub lint_exclude: Option<Vec<String>>,
+    pub python_dependencies: Option<bool>,
     pub sql_dialect: Option<String>,
     pub tool_pins: BTreeMap<String, String>,
     pub tool_args: BTreeMap<String, Vec<String>>,
@@ -103,6 +112,9 @@ impl Config {
         }
         if let Some(v) = layer.lint_exclude {
             self.lint.exclude = v;
+        }
+        if let Some(v) = layer.python_dependencies {
+            self.python.dependencies = v;
         }
         if let Some(v) = layer.sql_dialect {
             self.sql.dialect = v;
@@ -196,7 +208,7 @@ fn load_file(path: &Path, warnings: &mut Vec<String>) -> anyhow::Result<Layer> {
         .with_context(|| format!("could not parse `{}`", path.display()))
         .hint(
             "fix the TOML shown above; the supported keys are [format], [lint], \
-             [sql], and [tools]",
+             [python], [sql], and [tools]",
         )?;
     for key in parsed.unknown_keys {
         warnings.push(format!(

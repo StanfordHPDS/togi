@@ -52,6 +52,9 @@ exclude = ["renv/**", "vendor/**"]  # gitignore-style globs, additive to .gitign
 languages = ["r", "python", "quarto", "sql"]
 exclude = []
 
+[python]
+dependencies = true   # set false to disable Python dependency checks
+
 [sql]
 dialect = "bigquery"   # passed to sqlfluff when no .sqlfluff applies
 
@@ -101,6 +104,12 @@ their own. A project `.panache.toml`, `panache.toml`, or
 `.config/panache.toml` found while walking up from the input files, or a
 user-level config at `~/.config/panache/config.toml` (or
 `$XDG_CONFIG_HOME/panache/config.toml`), takes full control.
+
+## `[python]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `dependencies` | boolean | `true` | Whether `togi lint` checks Python project dependencies. Set this to `false` to disable the check without disabling other Python linting. |
 
 ## `[sql]`
 

@@ -23,6 +23,7 @@ pub(crate) struct Parsed {
 struct RawConfig {
     format: Option<RawSelection>,
     lint: Option<RawSelection>,
+    python: Option<RawPython>,
     sql: Option<RawSql>,
     tools: Option<toml::Table>,
     #[serde(flatten)]
@@ -42,6 +43,14 @@ struct RawSelection {
 #[serde(rename_all = "kebab-case")]
 struct RawSql {
     dialect: Option<String>,
+    #[serde(flatten)]
+    unknown: toml::Table,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct RawPython {
+    dependencies: Option<bool>,
     #[serde(flatten)]
     unknown: toml::Table,
 }
@@ -69,6 +78,10 @@ pub(crate) fn parse(text: &str) -> anyhow::Result<Parsed> {
         layer.lint_languages = lint.languages;
         layer.lint_exclude = lint.exclude;
         unknown_keys.extend(note_unknown(&lint.unknown, "lint"));
+    }
+    if let Some(python) = raw.python {
+        layer.python_dependencies = python.dependencies;
+        unknown_keys.extend(note_unknown(&python.unknown, "python"));
     }
     if let Some(sql) = raw.sql {
         layer.sql_dialect = sql.dialect;

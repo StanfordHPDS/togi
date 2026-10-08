@@ -84,6 +84,7 @@ impl Sandbox {
     fn install_all_defaults(&self) {
         for (name, version) in [
             ("air", AIR_DEFAULT),
+            ("deptry", DEPTRY_DEFAULT),
             ("ruff", RUFF_DEFAULT),
             ("panache", PANACHE_DEFAULT),
             ("sqlfluff", SQLFLUFF_DEFAULT),
@@ -246,6 +247,7 @@ fn update_installs_missing_tools_from_scratch() {
     let sb = Sandbox::new();
     // Everything cached except air.
     for (name, version) in [
+        ("deptry", DEPTRY_DEFAULT),
         ("ruff", RUFF_DEFAULT),
         ("panache", PANACHE_DEFAULT),
         ("sqlfluff", SQLFLUFF_DEFAULT),

@@ -60,7 +60,7 @@ impl ToolSpec {
     }
 
     /// All tools this togi release knows how to install.
-    pub fn builtins() -> [ToolSpec; 5] {
+    pub fn builtins() -> [ToolSpec; 6] {
         [
             ToolSpec {
                 name: "air",
@@ -70,6 +70,11 @@ impl ToolSpec {
                     asset_pattern: "air-{arch}-{os}.{ext}",
                     checksum_pattern: Some("air-{arch}-{os}.{ext}.sha256"),
                 },
+            },
+            ToolSpec {
+                name: "deptry",
+                default_version: versions::DEPTRY,
+                kind: ToolKind::UvTool { package: "deptry" },
             },
             ToolSpec {
                 name: "ruff",
@@ -265,9 +270,12 @@ mod tests {
     }
 
     #[test]
-    fn builtins_cover_the_five_managed_tools() {
+    fn builtins_cover_the_six_managed_tools() {
         let names: Vec<&str> = ToolSpec::builtins().iter().map(|s| s.name).collect();
-        assert_eq!(names, ["air", "ruff", "panache", "sqlfluff", "uv"]);
+        assert_eq!(
+            names,
+            ["air", "deptry", "ruff", "panache", "sqlfluff", "uv"]
+        );
     }
 
     #[test]

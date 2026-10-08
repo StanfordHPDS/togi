@@ -94,6 +94,11 @@ impl<'a> ToolCtx<'a> {
     pub fn tool_path(&self, tool: &str) -> anyhow::Result<PathBuf> {
         self.tools.tool_path(tool)
     }
+
+    /// The Python interpreter in a uv-managed tool's virtual environment.
+    pub fn tool_python(&self, tool: &str) -> anyhow::Result<PathBuf> {
+        self.tools.tool_python(tool)
+    }
 }
 
 /// Render one tool invocation — the program followed by its arguments,
@@ -122,6 +127,13 @@ pub(crate) fn log_command(ctx: &ToolCtx, program: &Path, args: &[OsString]) {
 /// threads.
 pub trait ToolPaths: Sync {
     fn tool_path(&self, tool: &str) -> anyhow::Result<PathBuf>;
+
+    fn tool_python(&self, tool: &str) -> anyhow::Result<PathBuf> {
+        Err(anyhow::anyhow!(
+            "the tool path provider cannot resolve the managed Python interpreter for `{tool}`"
+        ))
+        .hint("this is a togi bug; please report it")
+    }
 }
 
 /// The production [`ToolPaths`]: resolves through the managed tool cache,
@@ -157,6 +169,18 @@ impl ToolPaths for InstalledToolPaths<'_> {
             verbose: self.verbose,
         };
         crate::tools::ensure_installed(&spec, &self.config.tools, &ctx)
+    }
+
+    fn tool_python(&self, tool: &str) -> anyhow::Result<PathBuf> {
+        let spec = ToolSpec::builtin(tool)
+            .ok_or_else(|| anyhow::anyhow!("no managed tool named `{tool}`"))
+            .hint("this is a bug in togi: an adapter asked for a tool it does not manage; please report it")?;
+        let ctx = InstallContext {
+            label: crate::tools::label_for(tool),
+            command: self.command,
+            verbose: self.verbose,
+        };
+        crate::tools::ensure_python(&spec, &self.config.tools, &ctx)
     }
 }
 
@@ -200,6 +224,24 @@ mod tests {
             .expect("fake provider has deptry's interpreter");
         assert_eq!(resolved, PathBuf::from("/fake/venv/bin/python"));
         assert_eq!(paths.python_requests(), vec!["deptry".to_string()]);
+    }
+
+    #[test]
+    fn tool_paths_default_interpreter_error_has_a_hint() {
+        struct BinaryOnly;
+
+        impl ToolPaths for BinaryOnly {
+            fn tool_path(&self, tool: &str) -> anyhow::Result<PathBuf> {
+                Ok(PathBuf::from(tool))
+            }
+        }
+
+        let err = BinaryOnly
+            .tool_python("deptry")
+            .expect_err("binary-only providers cannot resolve interpreters");
+        let rendered = crate::term::render_error(&err, false);
+        assert!(rendered.contains("deptry"), "{rendered}");
+        assert!(rendered.contains("hint:"), "{rendered}");
     }
 
     #[test]

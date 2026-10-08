@@ -254,4 +254,15 @@ impl ToolPaths for FakeToolPaths {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("fake provider has no tool named `{tool}`"))
     }
+
+    fn tool_python(&self, tool: &str) -> anyhow::Result<PathBuf> {
+        self.python_requests
+            .lock()
+            .expect("python requests lock")
+            .push(tool.to_string());
+        self.python_paths
+            .get(tool)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("fake provider has no Python for tool `{tool}`"))
+    }
 }

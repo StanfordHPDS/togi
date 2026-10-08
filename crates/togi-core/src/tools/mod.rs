@@ -28,6 +28,7 @@ pub mod versions;
 use std::path::PathBuf;
 
 use crate::config::ToolsConfig;
+use crate::term::HintExt;
 
 // NOTE: unused_imports allowed: these re-exports are the module's public
 // surface, and within this crate some of them have only unit-test callers.
@@ -51,12 +52,36 @@ pub use uv_tool::UvToolInstaller;
 pub fn label_for(name: &str) -> &'static str {
     match name {
         "air" => "R formatter",
+        "deptry" => "Python dependency checker",
         "ruff" => "Python formatter/linter",
         "panache" => "Markdown formatter",
         "sqlfluff" => "SQL formatter/linter",
         "uv" => "uv (Python tool installer)",
         _ => "tool",
     }
+}
+
+/// Install a uv-managed tool at its resolved version and return the Python
+/// interpreter inside that tool's private virtual environment.
+pub fn ensure_python(
+    spec: &ToolSpec,
+    tools: &ToolsConfig,
+    ctx: &InstallContext,
+) -> anyhow::Result<PathBuf> {
+    if !matches!(spec.kind, ToolKind::UvTool { .. }) {
+        return Err(anyhow::anyhow!(
+            "`{}` is a GitHub release binary and has no managed Python interpreter",
+            spec.name
+        ))
+        .hint("this is a togi bug; please report it");
+    }
+
+    let version = resolve_version(tools, spec);
+    let cache = ToolCache::from_env()?;
+    let platform = Platform::current()?;
+    let uv = ToolSpec::builtin("uv").expect("uv is a built-in tool");
+    let uv_version = resolve_version(tools, &uv).to_string();
+    UvToolInstaller::new(cache, platform, uv_version).ensure_python(spec, version, ctx)
 }
 
 /// The version of `spec` a run should use: the `[tools]` pin from config

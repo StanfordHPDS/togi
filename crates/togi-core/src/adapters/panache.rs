@@ -1,7 +1,7 @@
 //! The Quarto/Markdown adapter: panache formats and lints `.qmd`, `.Rmd`,
 //! and `.md` files, routing embedded R/Python chunks to air/ruff.
 //!
-//! # panache CLI contract (verified against panache 2.60.0)
+//! # panache CLI contract (verified against panache 3.14.0)
 //!
 //! - `panache format <files...>` formats in place; stdout carries one
 //!   `Formatted <path>` line per changed file plus a summary line

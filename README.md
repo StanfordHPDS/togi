@@ -94,7 +94,7 @@ $ togi tools list
 air        0.10.0     github release   installed 2026-07-05
 deptry     0.25.1     uv (PyPI)        installed 2026-07-05
 ruff       0.14.0     github release   installed 2026-07-05
-panache    2.60.0     github release   installed 2026-07-05
+panache    3.14.0     github release   installed 2026-10-08
 sqlfluff   3.4.0      uv (PyPI)        installed 2026-07-05
 uv         0.9.5      github release   installed 2026-07-05
 
@@ -103,7 +103,7 @@ togi 0.1.1
   air 0.10.0
   deptry 0.25.1
   ruff 0.14.0
-  panache 2.60.0
+  panache 3.14.0
   sqlfluff 3.4.0
   uv 0.9.5
 ```

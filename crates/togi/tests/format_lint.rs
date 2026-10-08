@@ -34,7 +34,7 @@ const AIR_DEFAULT: &str = "0.10.0";
 #[cfg(unix)]
 const RUFF_DEFAULT: &str = "0.14.0";
 #[cfg(unix)]
-const PANACHE_DEFAULT: &str = "2.60.0";
+const PANACHE_DEFAULT: &str = "3.14.0";
 #[cfg(unix)]
 const SQLFLUFF_DEFAULT: &str = "3.4.0";
 #[cfg(unix)]

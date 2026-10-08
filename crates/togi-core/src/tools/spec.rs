@@ -91,7 +91,7 @@ impl ToolSpec {
                 kind: ToolKind::GithubBinary {
                     repo: "jolars/panache",
                     asset_pattern: "panache-{arch}-{os}.{ext}",
-                    checksum_pattern: Some("panache-{arch}-{os}.{ext}.sha256"),
+                    checksum_pattern: Some("SHA256SUMS"),
                 },
             },
             ToolSpec {

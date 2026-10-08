@@ -77,8 +77,34 @@ pub fn lint_all_in_project(
     fix: bool,
     ctx: &ToolCtx,
 ) -> Vec<LintRun> {
+    lint_all_in_project_impl(registry, groups, None, root, whole_project, fix, ctx)
+}
+
+/// Lint file batches using their original paths while resolving project-scope
+/// paths against the directory from which the command was invoked.
+pub fn lint_all_in_project_from_cwd(
+    registry: &AdapterRegistry,
+    groups: &BTreeMap<Language, Vec<PathBuf>>,
+    cwd: &Path,
+    root: &Path,
+    whole_project: bool,
+    fix: bool,
+    ctx: &ToolCtx,
+) -> Vec<LintRun> {
+    lint_all_in_project_impl(registry, groups, Some(cwd), root, whole_project, fix, ctx)
+}
+
+fn lint_all_in_project_impl(
+    registry: &AdapterRegistry,
+    groups: &BTreeMap<Language, Vec<PathBuf>>,
+    cwd: Option<&Path>,
+    root: &Path,
+    whole_project: bool,
+    fix: bool,
+    ctx: &ToolCtx,
+) -> Vec<LintRun> {
     let file_batches = batches(registry, groups);
-    let project_batches = project_batches(registry, groups, root, whole_project);
+    let project_batches = project_batches(registry, groups, cwd, root, whole_project);
 
     let mut runs = if fix {
         let mut file_runs: Vec<LintRun> = file_batches
@@ -182,6 +208,7 @@ fn batches(registry: &AdapterRegistry, groups: &BTreeMap<Language, Vec<PathBuf>>
 fn project_batches(
     registry: &AdapterRegistry,
     groups: &BTreeMap<Language, Vec<PathBuf>>,
+    cwd: Option<&Path>,
     root: &Path,
     whole_project: bool,
 ) -> Vec<ProjectBatch> {
@@ -203,7 +230,10 @@ fn project_batches(
                 })
                 .scope
                 .files
-                .extend(files.iter().cloned());
+                .extend(files.iter().map(|file| match cwd {
+                    Some(cwd) if file.is_relative() => cwd.join(file),
+                    _ => file.clone(),
+                }));
         }
     }
     by_name.into_values().collect()

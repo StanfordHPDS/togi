@@ -5,17 +5,15 @@
 //! to stdout as a JSON array with the stable [`Diagnostic`] schema;
 //! warnings and error summaries go to stderr so the JSON stays parseable.
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Args, ValueEnum};
 
 use togi_core::adapters::{
-    AdapterRegistry, Diagnostic, InstalledToolPaths, ToolCtx, lint_all_in_project,
+    AdapterRegistry, Diagnostic, InstalledToolPaths, ToolCtx, lint_all_in_project_from_cwd,
 };
 use togi_core::config::{self, Layer};
-use togi_core::fsx::Language;
 use togi_core::term::{self, HintExt};
 
 use super::fmt_lint;
@@ -72,10 +70,10 @@ pub fn run(args: LintArgs, global: &super::GlobalArgs) -> anyhow::Result<()> {
     let registry = AdapterRegistry::with_defaults();
     let provider = InstalledToolPaths::new(&loaded.config, "togi lint", global.verbose);
     let ctx = ToolCtx::new(&provider, &loaded.config, global.verbose);
-    let groups = absolute_groups(&discovered.groups, &cwd);
-    let runs = lint_all_in_project(
+    let runs = lint_all_in_project_from_cwd(
         &registry,
-        &groups,
+        &discovered.groups,
+        &cwd,
         &root,
         args.paths.is_empty(),
         args.fix,
@@ -132,30 +130,6 @@ pub fn run(args: LintArgs, global: &super::GlobalArgs) -> anyhow::Result<()> {
         }
         Some((message, hint)) => Err(anyhow::anyhow!(message)).hint(hint),
     }
-}
-
-/// Resolve discovery's cwd-relative paths before constructing project
-/// scopes. Absolute paths pass through unchanged.
-fn absolute_groups(
-    groups: &BTreeMap<Language, Vec<PathBuf>>,
-    cwd: &Path,
-) -> BTreeMap<Language, Vec<PathBuf>> {
-    groups
-        .iter()
-        .map(|(&language, files)| {
-            let files = files
-                .iter()
-                .map(|file| {
-                    if file.is_absolute() {
-                        file.clone()
-                    } else {
-                        cwd.join(file)
-                    }
-                })
-                .collect();
-            (language, files)
-        })
-        .collect()
 }
 
 /// Whether the run failed (exit 1), and with what message and hint: any
@@ -239,19 +213,5 @@ mod tests {
     fn violations_and_tool_failures_combine() {
         let (message, _) = run_failure(2, 0, 1, false).expect("worst outcome");
         assert_eq!(message, "found 2 issues and 1 linter could not run");
-    }
-
-    #[test]
-    fn project_groups_make_cwd_relative_files_absolute_when_root_differs() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().join("project");
-        let cwd = root.join("nested");
-        let groups = BTreeMap::from([(Language::Python, vec![PathBuf::from("src/example.py")])]);
-
-        let absolute = absolute_groups(&groups, &cwd);
-
-        assert_eq!(absolute[&Language::Python], [cwd.join("src/example.py")]);
-        assert!(absolute[&Language::Python][0].is_absolute());
-        assert_ne!(cwd, root);
     }
 }

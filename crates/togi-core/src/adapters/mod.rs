@@ -34,7 +34,7 @@ pub use panache::PanacheAdapter;
 pub use python::RuffAdapter;
 pub use r::AirAdapter;
 pub use registry::AdapterRegistry;
-pub use runner::{format_all, lint_all, lint_all_in_project};
+pub use runner::{format_all, lint_all, lint_all_in_project, lint_all_in_project_from_cwd};
 pub use sql::SqlFluffAdapter;
 
 /// Formats a batch of files with one underlying tool invocation.

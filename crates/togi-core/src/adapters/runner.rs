@@ -753,4 +753,40 @@ mod tests {
         assert!(calls[0].files[0].is_absolute());
         assert!(!calls[0].whole_project);
     }
+
+    #[test]
+    fn cwd_relative_files_stay_short_for_adapters_and_are_absolute_for_project_scope() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("project-root");
+        let cwd = dir.path().join("a-very-long-invocation-directory-name");
+        let ruff = Arc::new(FakeAdapter::new("ruff"));
+        let project = Arc::new(FakeProjectLinter::new("deptry"));
+        let mut registry = AdapterRegistry::new();
+        registry.register(Language::Python, Arc::clone(&ruff) as Arc<dyn Adapter>);
+        registry.register_project_linter(
+            Language::Python,
+            Arc::clone(&project) as Arc<dyn ProjectLinter>,
+        );
+        let files: Vec<_> = (0..8_000)
+            .map(|index| PathBuf::from(format!("src/f{index}.py")))
+            .collect();
+        let groups = BTreeMap::from([(Language::Python, files.clone())]);
+        let provider = FakeToolPaths::default();
+        let config = Config::default();
+        let ctx = ToolCtx::new(&provider, &config, false);
+
+        lint_all_in_project_from_cwd(&registry, &groups, &cwd, &root, false, false, &ctx);
+
+        let adapter_calls = ruff.lint_calls();
+        let adapter_files = &adapter_calls[0].files;
+        assert_eq!(adapter_files.len(), 8_000);
+        assert_eq!(adapter_files, &files);
+        assert!(adapter_files.iter().all(|file| file.is_relative()));
+        let project_calls = project.calls();
+        assert_eq!(project_calls[0].root, root);
+        assert_eq!(project_calls[0].files.len(), 8_000);
+        assert_eq!(project_calls[0].files[0], cwd.join("src/f0.py"));
+        assert_eq!(project_calls[0].files[7_999], cwd.join("src/f7999.py"));
+        assert!(project_calls[0].files.iter().all(|file| file.is_absolute()));
+    }
 }

@@ -88,20 +88,28 @@ jobs:
       actions: write
       contents: write
     env:
+      GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
       MERGE_SHA: ${{ github.event.workflow_run.head_sha }}
       TAG: ${{ needs.inspect.outputs.tag }}
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 0
-          persist-credentials: true
       - name: Create exact release tag
         if: needs.inspect.outputs.create_tag == 'true'
+        shell: bash
         run: |
-          git tag "$TAG" "$MERGE_SHA"
-          git push origin "$TAG"
+          EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" \
+            --jq '.object.sha' 2>/dev/null || true)
+          if [ -n "$EXISTING" ]; then
+            if [ "$EXISTING" != "$MERGE_SHA" ]; then
+              echo "tag $TAG points at $EXISTING, expected $MERGE_SHA" >&2
+              exit 1
+            fi
+            exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+            --method POST \
+            -f "ref=refs/tags/$TAG" \
+            -f "sha=$MERGE_SHA"
       - name: Dispatch cargo-dist release
         shell: bash
         run: |
@@ -111,5 +119,5 @@ jobs:
           ACTIVE=$(gh run list --workflow release.yml --branch "$TAG" \
             --json status --jq '[.[] | select(.status == "queued" or .status == "in_progress")] | length')
           if [ "$ACTIVE" -eq 0 ]; then
-            gh workflow run release.yml --ref "$TAG"
+            gh workflow run release.yml --ref "$TAG" -f "tag=$TAG"
           fi

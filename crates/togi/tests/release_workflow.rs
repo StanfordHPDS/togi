@@ -105,31 +105,19 @@ fn release_workflow_parses_as_yaml() {
 }
 
 #[test]
-fn release_workflow_triggers_on_version_tags_only() {
-    let yml = release_workflow();
-    assert!(
-        yml.contains("tags:"),
-        "release workflow must trigger on tag pushes"
-    );
-    // dist matches full and prerelease semver tags; either way the pattern
-    // starts with a v.
-    assert!(
-        yml.contains("'**[0-9]+.[0-9]+.[0-9]+*'") || yml.contains("v*"),
-        "tag trigger must match vX.Y.Z version tags"
-    );
-    assert!(
-        !yml.contains("pull_request:"),
-        "release workflow must not run on pull requests (that is ci.yml's job)"
-    );
-}
-
-#[test]
 fn release_workflow_accepts_an_explicit_dispatch() {
-    let yml = release_workflow();
-    assert!(
-        yml.contains("workflow_dispatch:"),
-        "the post-merge workflow must be able to dispatch a release for its exact tag"
-    );
+    let parsed = workflow(&release_workflow());
+    let triggers = field(&parsed, "on");
+    let dispatch = field(triggers, "workflow_dispatch");
+    let tag = field(field(dispatch, "inputs"), "tag");
+    assert_eq!(field(tag, "required").as_bool(), Some(true));
+    let trigger_names: Vec<&str> = triggers
+        .as_mapping()
+        .expect("trigger mapping")
+        .keys()
+        .filter_map(serde_yaml::Value::as_str)
+        .collect();
+    assert_eq!(trigger_names, ["workflow_dispatch"]);
 }
 
 #[test]
@@ -251,7 +239,18 @@ fn managed_tool_release_waits_for_successful_post_merge_ci() {
         yml.contains("cargo test --workspace --locked --features online-tests -- --ignored"),
         "the exact merge commit must pass real managed-tool tests before release"
     );
-    assert!(yml.contains("gh workflow run release.yml"));
+    assert!(
+        yml.contains("gh workflow run release.yml --ref \"$TAG\" -f \"tag=$TAG\""),
+        "cargo-dist must run from and release the exact validated tag"
+    );
+    assert!(
+        !yml.contains("uses: actions/checkout@v6\n        with:\n          ref: ${{ github.event.workflow_run.head_sha }}\n          fetch-depth: 0\n          persist-credentials: true"),
+        "the write-capable publish job must not check out workflow-run code"
+    );
+    assert!(
+        yml.contains("git/ref/tags/$TAG") && yml.contains("$EXISTING\" != \"$MERGE_SHA"),
+        "a failed-job retry must accept only an existing tag at the exact merge commit"
+    );
     assert_permissions(&parsed, &[("contents", "read")]);
     let jobs = field(&parsed, "jobs").as_mapping().expect("jobs mapping");
     let inspect = jobs
@@ -263,6 +262,11 @@ fn managed_tool_release_waits_for_successful_post_merge_ci() {
     assert_permissions(inspect, &[("contents", "read"), ("pull-requests", "read")]);
     assert_permissions(publish, &[("actions", "write"), ("contents", "write")]);
     assert_eq!(field(publish, "needs").as_str(), Some("inspect"));
+    assert_eq!(
+        field(field(publish, "env"), "GH_REPO").as_str(),
+        Some("${{ github.repository }}"),
+        "gh must know the repository without a privileged checkout"
+    );
 }
 
 #[test]
@@ -353,7 +357,16 @@ fn dist_config_skips_pull_request_runs() {
         .expect("dist-workspace.toml must set [dist] pr-run-mode");
     assert_eq!(
         mode, "skip",
-        "release plumbing must fire on tags only; ci.yml owns PR checks"
+        "release plumbing must skip pull requests; ci.yml owns PR checks"
+    );
+    let dispatch = parsed
+        .get("dist")
+        .and_then(|d| d.get("dispatch-releases"))
+        .and_then(|value| value.as_bool());
+    assert_eq!(
+        dispatch,
+        Some(true),
+        "releases must support exact-tag dispatch"
     );
 }
 

@@ -37,6 +37,8 @@ const RUFF_DEFAULT: &str = "0.14.0";
 const PANACHE_DEFAULT: &str = "2.60.0";
 #[cfg(unix)]
 const SQLFLUFF_DEFAULT: &str = "3.4.0";
+#[cfg(unix)]
+const DEPTRY_DEFAULT: &str = "0.25.1";
 
 /// A throwaway copy of the mixed-project fixture plus isolated config and
 /// tool-cache directories.
@@ -110,6 +112,7 @@ impl Sandbox {
         cmd.current_dir(&self.project)
             .env("TOGI_CONFIG_DIR", &self.user_dir)
             .env("TOGI_DATA_DIR", &self.data_dir)
+            .env_remove("VIRTUAL_ENV")
             .args(args);
         cmd
     }
@@ -222,6 +225,18 @@ mod with_shims {
 }}"#
         );
         fs::write(dir.join("manifest.json"), manifest).expect("write fake manifest");
+    }
+
+    fn install_deptry_shim(sb: &Sandbox, script: &str) {
+        install_shim(sb, "deptry", DEPTRY_DEFAULT, "#!/bin/sh\nexit 99\n");
+        let python = sb
+            .data_dir
+            .join("tools/deptry")
+            .join(DEPTRY_DEFAULT)
+            .join("uv-tools/deptry/bin/python");
+        fs::create_dir_all(python.parent().expect("python parent")).expect("create deptry venv");
+        fs::write(&python, script).expect("write deptry interpreter shim");
+        fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).expect("chmod deptry shim");
     }
 
     /// air protocol: `format [--check] --no-color <files...>`; check mode
@@ -769,6 +784,154 @@ exit 0
             !sb.project.join(".ruff_cache").exists(),
             "togi lint left a .ruff_cache in the project"
         );
+    }
+
+    const DEPTRY_VIOLATIONS_SHIM: &str = r#"#!/bin/sh
+out=''; previous=''
+for arg in "$@"; do
+  [ "$previous" = '--json-output' ] && out="$arg"
+  previous="$arg"
+done
+cat > "$out" <<'JSON'
+[{"error":{"code":"DEP001","message":"'numpy' imported but missing from the dependency definitions"},"module":"numpy","location":{"file":"main.py","line":1,"column":8}},{"error":{"code":"DEP002","message":"'pathlib' defined as a dependency but not used in the codebase"},"module":"pathlib","location":{"file":"pyproject.toml","line":null,"column":null}},{"error":{"code":"DEP002","message":"'requests' defined as a dependency but not used in the codebase"},"module":"requests","location":{"file":"pyproject.toml","line":null,"column":null}},{"error":{"code":"DEP005","message":"'pathlib' is defined as a dependency but it is included in the Python standard library."},"module":"pathlib","location":{"file":"pyproject.toml","line":null,"column":null}}]
+JSON
+exit 1
+"#;
+
+    fn deptry_project(with_environment: bool, deptry: &str) -> Sandbox {
+        let sb = Sandbox::empty();
+        sb.write_file("main.py", "import numpy\n");
+        sb.write_file(
+            "pyproject.toml",
+            "[project]\nname = 'demo'\nversion = '0.1.0'\ndependencies = ['pathlib', 'requests']\n",
+        );
+        install_shim(&sb, "ruff", RUFF_DEFAULT, RUFF_SHIM);
+        install_deptry_shim(&sb, deptry);
+        if with_environment {
+            fs::create_dir_all(sb.project.join(".venv/lib/python3.13/site-packages"))
+                .expect("create project environment");
+        }
+        sb
+    }
+
+    #[test]
+    fn deptry_findings_join_text_and_json_output_in_stable_order() {
+        let sb = deptry_project(true, DEPTRY_VIOLATIONS_SHIM);
+        sb.cmd(&["lint"]).assert().code(1).stdout(
+            predicate::str::contains("main.py:1:8: DEP001")
+                .and(predicate::str::contains("pyproject.toml: DEP002"))
+                .and(predicate::str::contains("pyproject.toml: DEP005")),
+        );
+
+        let assert = sb.cmd(&["lint", "--format", "json"]).assert().code(1);
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
+        let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).expect("pure JSON");
+        assert_eq!(items.len(), 4, "{stdout}");
+        assert_eq!(items[0]["path"], "main.py");
+        assert_eq!(items[1]["path"], "pyproject.toml");
+        assert_eq!(items[0]["code"], "DEP001");
+        assert_eq!(items[3]["code"], "DEP005");
+    }
+
+    #[test]
+    fn missing_environment_is_one_stderr_note_and_clean_json_even_when_quiet() {
+        let sb = deptry_project(false, DEPTRY_VIOLATIONS_SHIM);
+        for args in [
+            &["lint", "--format", "json"][..],
+            &["lint", "--quiet", "--format", "json"][..],
+        ] {
+            let assert = sb.cmd(args).assert().success();
+            let output = assert.get_output();
+            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "[]");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                stderr
+                    .matches("skipped the Python dependency check")
+                    .count(),
+                1,
+                "{stderr}"
+            );
+            assert!(stderr.contains("uv sync"), "{stderr}");
+        }
+    }
+
+    #[test]
+    fn opt_out_and_absent_manifest_are_silent_and_do_not_resolve_deptry() {
+        let opted_out = deptry_project(true, "#!/bin/sh\necho requested > deptry-ran\nexit 99\n");
+        opted_out.write_project_config("[python]\ndependencies = false\n");
+        opted_out
+            .cmd(&["lint", "--format", "json"])
+            .assert()
+            .success();
+        assert!(!opted_out.project.join("deptry-ran").exists());
+
+        let no_manifest = Sandbox::empty();
+        no_manifest.write_file("main.py", "print('ok')\n");
+        install_shim(&no_manifest, "ruff", RUFF_DEFAULT, RUFF_SHIM);
+        no_manifest
+            .cmd(&["lint", "--format", "json"])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("dependency check").not());
+    }
+
+    #[test]
+    fn explicit_file_drops_manifest_findings_and_excludes_drop_sources() {
+        let sb = deptry_project(true, DEPTRY_VIOLATIONS_SHIM);
+        let assert = sb
+            .cmd(&["lint", "main.py", "--format", "json"])
+            .assert()
+            .code(1);
+        let items: Vec<serde_json::Value> =
+            serde_json::from_slice(&assert.get_output().stdout).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["path"], "main.py");
+
+        sb.write_file("keep.py", "print('ok')\n");
+        sb.write_project_config("[lint]\nexclude = ['main.py']\n");
+        let assert = sb.cmd(&["lint", "--format", "json"]).assert().code(1);
+        let items: Vec<serde_json::Value> =
+            serde_json::from_slice(&assert.get_output().stdout).unwrap();
+        assert_eq!(items.len(), 3);
+        assert!(items.iter().all(|item| item["path"] == "pyproject.toml"));
+        let codes: Vec<_> = items.iter().map(|item| &item["code"]).collect();
+        assert_eq!(codes, ["DEP002", "DEP002", "DEP005"]);
+    }
+
+    #[test]
+    fn deptry_crash_keeps_ruff_findings_and_format_never_runs_deptry() {
+        let sb = deptry_project(true, "#!/bin/sh\necho deptry-crash >&2\nexit 2\n");
+        sb.write_file("main.py", "import os\n\nundefined_name\n");
+        sb.cmd(&["lint"])
+            .assert()
+            .code(1)
+            .stdout(predicate::str::contains("F401").and(predicate::str::contains("F821")))
+            .stderr(predicate::str::contains("deptry-crash"));
+
+        let format_only = deptry_project(true, "#!/bin/sh\necho requested > deptry-ran\nexit 99\n");
+        format_only.cmd(&["format"]).assert().success();
+        assert!(!format_only.project.join("deptry-ran").exists());
+    }
+
+    #[test]
+    fn lint_fix_finishes_ruff_edits_before_deptry_scans() {
+        let shim = r#"#!/bin/sh
+out=''; previous=''
+for arg in "$@"; do [ "$previous" = '--json-output' ] && out="$arg"; previous="$arg"; done
+if grep -q '^import os$' main.py; then
+  echo '[{"error":{"code":"DEP001","message":"stale import"},"module":"os","location":{"file":"main.py","line":1,"column":8}}]' > "$out"
+else
+  echo '[]' > "$out"
+fi
+exit 0
+"#;
+        let sb = deptry_project(true, shim);
+        sb.write_file("main.py", "import os\n");
+        sb.cmd(&["lint", "--fix", "--format", "json"])
+            .assert()
+            .success()
+            .stdout(predicate::eq("[]\n"));
+        assert!(!sb.read_file("main.py").contains("import os"));
     }
 
     // ---- -v logs each underlying tool invocation --------------------------

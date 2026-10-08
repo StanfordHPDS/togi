@@ -7,6 +7,8 @@
 //! source-level: implement [`Adapter`] and register it for its
 //! [`Language`](crate::fsx::Language) bucket in [`AdapterRegistry`].
 
+#[cfg(test)]
+mod deptry;
 mod diagnostic;
 mod outcome;
 mod panache;

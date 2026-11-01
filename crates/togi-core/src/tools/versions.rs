@@ -4,12 +4,12 @@
 //! `togi.toml`. They are updated (and re-verified against the upstream
 //! releases) as part of cutting a togi release, not at runtime.
 
-pub const AIR: &str = "0.10.0";
+pub const AIR: &str = "0.12.0";
 pub const DEPTRY: &str = "0.25.1";
-pub const RUFF: &str = "0.14.0";
-pub const PANACHE: &str = "3.14.0";
-pub const SQLFLUFF: &str = "3.4.0";
-pub const UV: &str = "0.9.5";
+pub const RUFF: &str = "0.17.3";
+pub const PANACHE: &str = "3.17.2";
+pub const SQLFLUFF: &str = "4.5.0";
+pub const UV: &str = "0.13.6";
 
 #[cfg(test)]
 mod tests {

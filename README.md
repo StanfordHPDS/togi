@@ -91,21 +91,21 @@ privately, and never touch your system installs:
 
 ```console
 $ togi tools list
-air        0.10.0     github release   installed 2026-07-05
+air        0.12.0     github release   installed 2026-11-01
 deptry     0.25.1     uv (PyPI)        installed 2026-07-05
-ruff       0.14.0     github release   installed 2026-07-05
-panache    3.14.0     github release   installed 2026-10-08
-sqlfluff   3.4.0      uv (PyPI)        installed 2026-07-05
-uv         0.9.5      github release   installed 2026-07-05
+ruff       0.17.3     github release   installed 2026-11-01
+panache    3.17.2     github release   installed 2026-11-01
+sqlfluff   4.5.0      uv (PyPI)        installed 2026-11-01
+uv         0.13.6      github release   installed 2026-11-01
 
 $ togi version
-togi 0.1.2
-  air 0.10.0
+togi 0.1.3
+  air 0.12.0
   deptry 0.25.1
-  ruff 0.14.0
-  panache 3.14.0
-  sqlfluff 3.4.0
-  uv 0.9.5
+  ruff 0.17.3
+  panache 3.17.2
+  sqlfluff 4.5.0
+  uv 0.13.6
 ```
 
 Stay current, and set up your shell:

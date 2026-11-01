@@ -74,13 +74,13 @@ dialect = "bigquery"   # passed to sqlfluff when no .sqlfluff applies
 # Version pins for managed tools; omit to use the versions baked into this
 # togi release. A bare `name = "x.y.z"` is a pin.
 [tools]
-ruff = "0.14.0"
+ruff = "0.17.3"
 
 # A tool needing passthrough args (and optionally a pin) uses a
 # `[tools.<name>]` table instead — TOML forbids `air = "..."` and a
 # `[tools.air]` table in the same file.
 [tools.air]
-version = "0.10.0"
+version = "0.12.0"
 args = ["--verbose"]
 
 [tools.deptry]
@@ -212,7 +212,7 @@ everything here to use the versions baked into this togi release —
 
 There are two shapes:
 
-- **A bare pin** under `[tools]`: `ruff = "0.14.0"`. The value is the exact
+- **A bare pin** under `[tools]`: `ruff = "0.17.3"`. The value is the exact
   version togi installs and runs.
 - **A `[tools.<name>]` table** when a tool needs passthrough args (and
   optionally a pin). Use this form instead of a bare pin whenever you also
@@ -221,7 +221,7 @@ There are two shapes:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `<name>` (under `[tools]`) | string | release default | Version pin for the tool `<name>`, e.g. `air = "0.10.0"`. `togi tools update` installs pinned versions; unpinned tools stay on the release default. |
+| `<name>` (under `[tools]`) | string | release default | Version pin for the tool `<name>`, e.g. `air = "0.12.0"`. `togi tools update` installs pinned versions; unpinned tools stay on the release default. |
 | `version` (under `[tools.<name>]`) | string | release default | Version pin, equivalent to the bare-pin form; used when the same table also sets `args`. |
 | `args` (under `[tools.<name>]`) | array of strings | `[]` | Extra arguments appended to every invocation of the tool — the escape hatch for options togi does not expose directly. |
 

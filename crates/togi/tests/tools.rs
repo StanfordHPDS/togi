@@ -16,12 +16,12 @@ use predicates::prelude::*;
 
 /// Baked default versions (mirrors `src/tools/versions.rs`; drift fails
 /// the assertions below loudly).
-const AIR_DEFAULT: &str = "0.10.0";
+const AIR_DEFAULT: &str = "0.12.0";
 const DEPTRY_DEFAULT: &str = "0.25.1";
-const RUFF_DEFAULT: &str = "0.14.0";
-const PANACHE_DEFAULT: &str = "3.14.0";
-const SQLFLUFF_DEFAULT: &str = "3.4.0";
-const UV_DEFAULT: &str = "0.9.5";
+const RUFF_DEFAULT: &str = "0.17.3";
+const PANACHE_DEFAULT: &str = "3.17.2";
+const SQLFLUFF_DEFAULT: &str = "4.5.0";
+const UV_DEFAULT: &str = "0.13.6";
 
 /// A throwaway project dir, isolated user-config dir, and fake tool cache
 /// data dir.

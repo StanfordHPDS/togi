@@ -30,13 +30,13 @@ use predicates::prelude::*;
 /// makes the fake cache miss, which fails loudly against the dead URL).
 /// Only the shim tests consume these, and shims are unix-only.
 #[cfg(unix)]
-const AIR_DEFAULT: &str = "0.10.0";
+const AIR_DEFAULT: &str = "0.12.0";
 #[cfg(unix)]
-const RUFF_DEFAULT: &str = "0.14.0";
+const RUFF_DEFAULT: &str = "0.17.3";
 #[cfg(unix)]
-const PANACHE_DEFAULT: &str = "3.14.0";
+const PANACHE_DEFAULT: &str = "3.17.2";
 #[cfg(unix)]
-const SQLFLUFF_DEFAULT: &str = "3.4.0";
+const SQLFLUFF_DEFAULT: &str = "4.5.0";
 #[cfg(unix)]
 const DEPTRY_DEFAULT: &str = "0.25.1";
 

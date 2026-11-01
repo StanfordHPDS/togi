@@ -81,11 +81,13 @@ impl SqlFluffAdapter {
 /// directory strictly between the home directory and the file's
 /// directory, starting below their common ancestor; and the working
 /// directory's common ancestor with the file's directory down to and
-/// including that directory. Its root config for the run additionally
-/// reads the directories strictly between home and the working directory,
-/// and the working directory itself. togi runs sqlfluff in its own
-/// working directory, so both walks use the same `cwd`, which is also
-/// where a relative `--config` path is resolved.
+/// including that directory, compared lexically, so the working
+/// directory itself is read only when the file's path runs through it (a
+/// file below it, or a relative path such as `../data/q.sql`). The
+/// settings that decide togi's defaults come from that per-file config
+/// alone. togi runs sqlfluff in its own working directory, so `cwd` is
+/// also where relative input paths and a relative `--config` path are
+/// resolved.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ConfigEnv {
     /// The home directory, if known.
@@ -845,10 +847,9 @@ fn same_component(a: &Component, b: &Component) -> bool {
 }
 
 /// Which of togi's defaults the config sqlfluff reads for each of `files`
-/// already sets, parallel to `files`: the user-level directories, the
-/// directories of sqlfluff's root config for the working directory, and
-/// each file's own search directories (see [`ConfigEnv`]). Each directory
-/// is read once per call however many files share it.
+/// already sets, parallel to `files`: the user-level directories and each
+/// file's own search directories (see [`ConfigEnv`]). Each directory is
+/// read once per call however many files share it.
 fn keys_set_per_file(files: &[PathBuf], env: &ConfigEnv) -> Vec<KeySet> {
     let home = env.home.as_deref();
     let cwd = env.cwd.as_deref();
@@ -861,11 +862,6 @@ fn keys_set_per_file(files: &[PathBuf], env: &ConfigEnv) -> Vec<KeySet> {
     let mut shared = KeySet::NONE;
     for dir in &env.user_dirs {
         shared = shared.union(keys_in(dir));
-    }
-    if let Some(cwd) = cwd {
-        for dir in dir_search_dirs(cwd, home, Some(cwd)) {
-            shared = shared.union(keys_in(&dir));
-        }
     }
     let mut per_dir: HashMap<PathBuf, KeySet> = HashMap::new();
     for dir in parent_dirs(files, cwd) {
@@ -2012,7 +2008,8 @@ tab_space_size = 4
             vec![keys(&[]), keys(&[DIALECT])]
         );
 
-        // The working directory's config counts for files elsewhere.
+        // The working directory's config counts for a file elsewhere only
+        // when the file's path runs through the working directory.
         let home = project();
         let cwd = home.path().join("run");
         let elsewhere = home.path().join("data");
@@ -2024,9 +2021,13 @@ tab_space_size = 4
             cwd: Some(cwd),
             user_dirs: Vec::new(),
         };
+        let files = vec![
+            elsewhere.join("q.sql"),
+            Path::new("..").join("data").join("q.sql"),
+        ];
         assert_eq!(
-            keys_set_per_file(&[elsewhere.join("q.sql")], &env),
-            vec![keys(&[DIALECT])]
+            keys_set_per_file(&files, &env),
+            vec![keys(&[]), keys(&[DIALECT])]
         );
     }
 
@@ -2270,6 +2271,47 @@ tab_space_size = 4
             read_named_config(&dir.path().join("missing.cfg"), None),
             None
         );
+    }
+
+    #[test]
+    fn a_named_config_default_section_setting_is_not_added_again() {
+        let dir = project();
+        let conf = tempfile::tempdir().expect("tempdir");
+        let custom = conf.path().join("custom.cfg");
+        fs::write(
+            &custom,
+            "[DEFAULT]\ndialect = ansi\n\n[sqlfluff]\ntemplater = jinja\n",
+        )
+        .expect("write");
+        let mut config = Config::default();
+        config.tools.args.insert(
+            TOOL.to_string(),
+            vec![
+                "--config".to_string(),
+                custom.to_string_lossy().into_owned(),
+            ],
+        );
+        let plan = RunPlan::new(&[dir.path().join("q.sql")], &hermetic(dir.path()), &config)
+            .expect("plan");
+        assert!(plan.extra_args.is_empty(), "{:?}", plan.extra_args);
+        assert_eq!(plan.groups.len(), 1);
+        let generated = plan.groups[0].config.as_ref().expect("a generated config");
+        let text = fs::read_to_string(generated.path()).expect("read");
+        let options = scanned(&text);
+        assert_eq!(
+            options
+                .iter()
+                .filter(|(_, key, _)| key == "dialect")
+                .count(),
+            1,
+            "the DEFAULT dialect already applies to [sqlfluff]: {text}"
+        );
+        assert!(
+            options.contains(&triple(INI_DEFAULT_SECTION, "dialect", "ansi")),
+            "{text}"
+        );
+        assert_eq!(text.matches("[sqlfluff]").count(), 1, "{text}");
+        assert_eq!(ini_keys(&text), KeySet::ALL, "{text}");
     }
 
     #[test]
@@ -3252,9 +3294,11 @@ tab_space_size = 4
         }
 
         #[test]
-        fn config_in_the_working_directory_counts_for_files_elsewhere() {
-            // sqlfluff's root config reads the working directory even when
-            // the files live in a sibling directory.
+        fn config_in_the_working_directory_counts_only_for_files_reached_through_it() {
+            // sqlfluff builds each file's config from the file's own
+            // directory chain: a sibling directory named by absolute path
+            // does not pass through the working directory, while one named
+            // as `../data/q.sql` does.
             let home = project();
             let cwd = home.path().join("run");
             let elsewhere = home.path().join("data");
@@ -3267,7 +3311,15 @@ tab_space_size = 4
                 user_dirs: Vec::new(),
             };
             assert_eq!(
-                generated_for(env, &Config::default(), &[elsewhere.join("q.sql")]),
+                generated_for(env.clone(), &Config::default(), &[elsewhere.join("q.sql")]),
+                want(&[dialect("bigquery"), large_files(), policy()])
+            );
+            assert_eq!(
+                generated_for(
+                    env,
+                    &Config::default(),
+                    &[Path::new("..").join("data").join("q.sql")]
+                ),
                 want(&[large_files(), policy()])
             );
         }

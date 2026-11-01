@@ -192,12 +192,14 @@ togi reads the configs sqlfluff would read:
 - the sqlfluff sections of `setup.cfg`, `tox.ini`, and `pep8.ini`
 - the `tool.sqlfluff` table of `pyproject.toml`
 
-in every directory sqlfluff searches:
+in every directory sqlfluff searches for each input file:
 
-- the working directory
-- the directories between the home directory and each input file
-- the directories from the working directory (or its nearest ancestor shared
-  with the file) down to each input file
+- the directories between the home directory and the file
+- the directories from the working directory's nearest ancestor shared with
+  the file down to the file's own directory; the working directory itself
+  counts only when it lies on that path, as it does for a file below it or
+  one named relative to it such as `../data/q.sql`, but not for a sibling
+  directory named by its absolute path
 - the home directory itself
 - sqlfluff's user config directory: `~/.config/sqlfluff` whenever that
   directory exists, on every platform, Windows included; otherwise
@@ -223,8 +225,9 @@ generated file instead: the named config's text, with its relative paths
 resolved against its own directory as sqlfluff would resolve them, plus the
 defaults still unset, each added at the end of the section it belongs in
 (or in a new section at the end). The exception is a `--config` naming a
-`pyproject.toml` or a file togi cannot read: togi passes the arguments as
-written and adds no defaults.
+`pyproject.toml` or a file togi cannot read as UTF-8 text (a missing or
+unreadable file, say): togi passes the arguments to sqlfluff as written and
+adds none of its defaults.
 
 ## `[tools]` and `[tools.<name>]`
 

@@ -1299,7 +1299,7 @@ dependencies = [
 
 [[package]]
 name = "togi"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -1326,7 +1326,7 @@ dependencies = [
 
 [[package]]
 name = "togi-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anstyle",
  "anyhow",

@@ -30,7 +30,7 @@ from a directory initialized as a git repository.
 
 | File | Command | Notes |
 | --- | --- | --- |
-| `lint-findings-exit1.stdout.txt` | `panache lint --message-format short --no-color --no-cache --config <default> lint-findings.qmd README.md` | stdout, exit 1. panache 3.14.0 exits 1 whenever lint finds anything, with or without `--check`; the findings are diagnostics, not a failed run. It prints absolute paths even for relative inputs, so the recording directory has been replaced with `/project/`. The `F821` and `F401` lines come from ruff linting the embedded Python chunk. |
+| `lint-findings-exit1.stdout.txt` | `panache lint --message-format short --no-color --no-cache --config <default> lint-findings.qmd README.md` | stdout, exit 1. panache 3.14.0 exits 1 whenever lint finds anything, with or without `--check`; the findings are diagnostics, not a failed run. It prints absolute paths even for relative inputs, so the recording directory has been replaced with `/project/`. The `F821` and `F401` lines come from ruff 0.16.10 linting the embedded Python chunk; the severity of ruff findings depends on the ruff version. |
 | `lint-findings-exit1.stderr.txt` | (same run) | stderr, exit 1. Only a blank line and the `Found N issue(s) across M file(s)` summary; no `Error:` line, unlike a real failure (`format-error.txt`). |
 
 The exact input documents are checked in under `inputs/`. To re-record,

@@ -1402,7 +1402,6 @@ x = dropcols\n\
             .iter()
             .find(|d| d.code.as_deref() == Some("F821"))
             .unwrap_or_else(|| panic!("an F821 diagnostic: {diagnostics:?}"));
-        assert_eq!(undefined.severity, Severity::Error);
         assert!(undefined.message.contains("dropcols"), "{undefined:?}");
     }
 }

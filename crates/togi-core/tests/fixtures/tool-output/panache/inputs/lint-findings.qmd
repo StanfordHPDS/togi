@@ -1,0 +1,10 @@
+---
+title: "Findings"
+---
+
+```{python}
+x = dropcols
+import os
+```
+
+See @fig-nope.

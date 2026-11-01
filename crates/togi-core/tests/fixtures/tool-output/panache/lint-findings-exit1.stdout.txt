@@ -1,0 +1,5 @@
+/project/lint-findings.qmd:6:5: error[F821]: Undefined name `dropcols`
+/project/lint-findings.qmd:7:8: error[F401]: `os` imported but unused
+/project/lint-findings.qmd:10:6: warning[undefined-reference-label]: Cross-reference label '@fig-nope' not found
+
+Found 3 issue(s)

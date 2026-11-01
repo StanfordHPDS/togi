@@ -148,8 +148,8 @@ rendered beside a `.qmd`/`.Rmd` source of the same name (`README.md` next to
 Quarto/Markdown prose one sentence per line, and turns off panache's
 `missing-chunk-labels` lint (an existing panache config, project or user,
 replaces these last two; see `docs/togi.toml.md`). For SQL, it lints large
-files and leaves identifier case alone unless the project or user has
-sqlfluff config. To change what it covers, create a `togi.toml` at the
+files and leaves identifier case alone unless the project's or user's own
+sqlfluff config sets those settings itself. To change what it covers, create a `togi.toml` at the
 project root; it overrides only the keys it sets:
 
 ```toml

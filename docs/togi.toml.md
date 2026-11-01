@@ -69,7 +69,7 @@ exclude = []
 dependencies = true   # set false to disable Python dependency checks
 
 [sql]
-dialect = "bigquery"   # passed to sqlfluff when no .sqlfluff applies
+dialect = "bigquery"   # used by sqlfluff unless its own config sets a dialect
 
 # Version pins for managed tools; omit to use the versions baked into this
 # togi release. A bare `name = "x.y.z"` is a pin.
@@ -167,24 +167,32 @@ make deptry guess an import name; togi keeps that upstream warning visible.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `dialect` | string | `"bigquery"` | SQL dialect passed to sqlfluff. Only applied when neither the project nor the user has configured sqlfluff (a `.sqlfluff` file wins). |
+| `dialect` | string | `"bigquery"` | SQL dialect for sqlfluff. Applied unless a sqlfluff config that applies to the file sets its own `dialect`. |
 
-When neither the project nor the user has sqlfluff config, togi also applies two
-sqlfluff settings alongside the dialect: `large_file_skip_byte_limit = 0`, so
-large SQL files are linted rather than skipped, and
-`unquoted_identifiers_policy = none` for the `capitalisation.identifiers`
-rule, so identifier case is left as written.
+togi supplies three sqlfluff settings as defaults:
 
-Any sqlfluff config that sqlfluff itself would read takes full control
-instead. That means:
+- `dialect`, from `[sql] dialect`
+- `large_file_skip_byte_limit = 0`, so large SQL files are linted rather
+  than skipped
+- `unquoted_identifiers_policy = none` for the `capitalisation.identifiers`
+  rule, so identifier case is left as written
+
+A sqlfluff config of the project's or the user's own is merged with these
+defaults setting by setting: each default applies unless a config that
+sqlfluff reads for the file sets that same setting, and everything else the
+config sets applies as usual. For example, a `.sqlfluff` that only supplies
+Jinja template values keeps togi's dialect and identifier policy, while one
+that sets `dialect = duckdb` keeps the other two defaults. An
+`unquoted_identifiers_policy` set for all rules (`[sqlfluff:rules]`, or
+`tool.sqlfluff.rules` in `pyproject.toml`) counts as setting the policy.
+
+togi reads the configs sqlfluff would read:
 
 - a `.sqlfluff` file
-- a sqlfluff section in `setup.cfg`, `tox.ini`, or `pep8.ini`
-- a `tool.sqlfluff` table in `pyproject.toml`
-- a `pyproject.toml` that togi cannot read or parse, so sqlfluff reports the
-  problem itself
+- the sqlfluff sections of `setup.cfg`, `tox.ini`, and `pep8.ini`
+- the `tool.sqlfluff` table of `pyproject.toml`
 
-found in any directory sqlfluff searches:
+in every directory sqlfluff searches:
 
 - the working directory
 - the directories between the home directory and each input file
@@ -198,10 +206,25 @@ found in any directory sqlfluff searches:
   `~/Library/Application Support/sqlfluff` on macOS; on Windows,
   `%LOCALAPPDATA%\sqlfluff\sqlfluff`
 
-togi passes these two settings to sqlfluff as a generated `--config` file.
-sqlfluff honors only the last `--config` it receives and does not merge
-config files, so a `--config` in `[tools.sqlfluff] args` replaces togi's
-generated config entirely, and these two settings no longer apply.
+A config file that sqlfluff would fail to read (for example a
+`pyproject.toml` that is not valid TOML) counts as setting all three, so
+togi adds nothing and sqlfluff reports the problem itself. With
+`--ignore-local-config` in `[tools.sqlfluff] args`, sqlfluff reads none of
+these, and togi supplies every default.
+
+togi passes the defaults a file still needs to sqlfluff as a generated
+`--config` file. When files in one run need different defaults, togi runs
+sqlfluff once for each set of files that agree and combines the results.
+
+A `--config` in `[tools.sqlfluff] args` is merged the same way. Its
+settings sit above every config sqlfluff discovers, so they count as set
+for every file. sqlfluff reads only one `--config`, so togi passes a single
+generated file instead: the named config's text, with its relative paths
+resolved against its own directory as sqlfluff would resolve them, plus the
+defaults still unset, each added at the end of the section it belongs in
+(or in a new section at the end). The exception is a `--config` naming a
+`pyproject.toml` or a file togi cannot read: togi passes the arguments as
+written and adds no defaults.
 
 ## `[tools]` and `[tools.<name>]`
 

@@ -754,6 +754,83 @@ exit 1
         );
     }
 
+    // ---- panache exits 1 when lint finds something -----------------------
+
+    /// A panache that behaves like the real 3.14.0 lint: findings go to
+    /// stdout with absolute paths, a summary goes to stderr, and the exit
+    /// code is 1 whenever anything was found. `format` is a no-op.
+    const PANACHE_FINDINGS_EXIT1_SHIM: &str = r#"#!/bin/sh
+sub="$1"; shift
+skip=0; files=""
+for a in "$@"; do
+  if [ $skip -eq 1 ]; then skip=0; continue; fi
+  case "$a" in
+    --config|--message-format) skip=1 ;;
+    --*) ;;
+    *) files="$files $a" ;;
+  esac
+done
+[ "$sub" = "format" ] && exit 0
+here=$(pwd)
+count=0
+for f in $files; do
+  if grep -q 'dropcols' "$f"; then
+    case "$f" in /*) path="$f" ;; *) path="$here/$f" ;; esac
+    echo "$path:6:5: error[F821]: Undefined name \`dropcols\`"
+    count=$((count + 1))
+  fi
+done
+[ $count -eq 0 ] && exit 0
+printf '\nFound %s issue(s)\n' "$count"
+printf '\nFound %s issue(s) across 1 file(s)\n' "$count" >&2
+exit 1
+"#;
+
+    /// A Quarto-only sandbox whose Python chunk uses an undefined name,
+    /// with panache (and the air/ruff it resolves) installed as shims.
+    fn quarto_with_panache_findings() -> Sandbox {
+        let sb = Sandbox::empty();
+        sb.write_file(
+            "report.qmd",
+            "---\ntitle: \"Findings\"\n---\n\n```{python}\nx = dropcols\n```\n",
+        );
+        install_shim(&sb, "air", AIR_DEFAULT, AIR_SHIM);
+        install_shim(&sb, "ruff", RUFF_DEFAULT, RUFF_SHIM);
+        install_shim(&sb, "panache", PANACHE_DEFAULT, PANACHE_FINDINGS_EXIT1_SHIM);
+        sb
+    }
+
+    #[test]
+    fn lint_reports_panache_findings_from_an_exit_1_run() {
+        let sb = quarto_with_panache_findings();
+        sb.cmd(&["lint"])
+            .assert()
+            .code(1)
+            .stdout(
+                predicate::str::contains("report.qmd:6:5: F821 Undefined name `dropcols`")
+                    .and(predicate::str::contains(sb.project.display().to_string()).not()),
+            )
+            .stderr(
+                predicate::str::contains("found 1 issue")
+                    .and(predicate::str::contains("could not run").not())
+                    .and(predicate::str::contains("could not finish").not()),
+            );
+    }
+
+    #[test]
+    fn lint_json_includes_panache_findings_from_an_exit_1_run() {
+        let sb = quarto_with_panache_findings();
+        let assert = sb.cmd(&["lint", "--format", "json"]).assert().code(1);
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf-8 stdout");
+        let diagnostics: serde_json::Value =
+            serde_json::from_str(&stdout).expect("stdout parses as JSON");
+        let items = diagnostics.as_array().expect("a JSON array");
+        assert_eq!(items.len(), 1, "{stdout}");
+        assert_eq!(items[0]["code"], "F821", "{stdout}");
+        assert_eq!(items[0]["severity"], "error", "{stdout}");
+        assert_eq!(items[0]["path"], "report.qmd", "{stdout}");
+    }
+
     // ---- ruff leaves no .ruff_cache in the project (--no-cache) -----------
 
     /// A ruff shim that writes a `.ruff_cache/` in its working directory
@@ -1057,5 +1134,36 @@ mod online {
             .assert()
             .success()
             .stdout(predicate::str::contains("nothing would change"));
+    }
+
+    #[test]
+    #[ignore = "downloads the real managed tools from the network"]
+    fn a_project_sqlfluff_config_keeps_togi_sql_defaults_it_does_not_set() {
+        // The project's own config only supplies template values, so togi's
+        // dialect and identifier policy still apply.
+        let sb = Sandbox::empty();
+        let home = sb.fake_home();
+        fs::write(
+            sb.project.join(".sqlfluff"),
+            "[sqlfluff:templater:jinja:context]\npred_year = 2016\n",
+        )
+        .expect("write .sqlfluff");
+        fs::write(sb.project.join("pred.sql"), "select {{ pred_year }} as y\n")
+            .expect("write pred.sql");
+        fs::write(
+            sb.project.join("mixed.sql"),
+            "select\n    UserId,\n    user_name\nfrom events\n",
+        )
+        .expect("write mixed.sql");
+
+        sb.cmd_with_home(&home, &["lint"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("CP02").not())
+            .stderr(predicate::str::contains("No dialect").not());
+        sb.cmd_with_home(&home, &["format", "--check"])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("No dialect").not());
     }
 }

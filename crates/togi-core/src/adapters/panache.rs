@@ -13,10 +13,17 @@
 //!   errors, which instead print `Error: ...` lines to stderr.
 //! - `panache lint --message-format short <files...>` prints one
 //!   diagnostic per line as `path:line:col: severity[code]: message`,
-//!   grouped per file with a trailing `Found N issue(s)` summary per
-//!   group. Without `--check` the exit code is 0 even when there are
-//!   findings, so a non-zero exit means the run itself failed. `--fix`
-//!   applies safe autofixes and reports what remains. Short output does
+//!   grouped per file, each group followed by a blank line and a
+//!   `Found N issue(s)` summary line on stdout that the parser skips. Exit
+//!   0 when there are no findings and exit 1 when there are, with a blank
+//!   line and a `Found N issue(s) across M file(s)` summary on stderr. An
+//!   exit 1 whose stdout yields no readable diagnostic is treated as a
+//!   failure rather than a clean run. Real failures (no supported files, an
+//!   invalid config) also exit 1 but print `Error: ...` lines to stderr;
+//!   usage errors exit 2. A missing path among real files only prints
+//!   `Warning: Path not found: ...` and is not a failure. `--fix` applies
+//!   safe autofixes, exits 0, and reports what remains with lines such as
+//!   `Found 1 issue(s) in <path> (no auto-fix available)`. Short output does
 //!   not say whether a finding is fixable, so [`Diagnostic::fixable`] is
 //!   always `false` here.
 //! - External formatters are **opt-in** via the `[formatters]` table of
@@ -228,15 +235,21 @@ impl Linter for PanacheAdapter {
             args.push("--fix");
         }
         let output = self.run(&args, files, ctx)?;
-        // Without --check, findings still exit 0; non-zero is a real
-        // failure (unreadable file, bad flag, ...).
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Exit 1 just means "found something"; real failures are Error
+        // lines on stderr (or an unexpected exit code, such as 2 for a
+        // usage error).
+        if !matches!(output.status.code(), Some(0 | 1)) || stderr_error(&stderr).is_some() {
             return Err(run_failure("panache lint", &output, &stderr));
         }
-        Ok(parse_short_diagnostics(&String::from_utf8_lossy(
-            &output.stdout,
-        )))
+        let diagnostics = parse_short_diagnostics(&String::from_utf8_lossy(&output.stdout));
+        // Exit 1 without an Error line claims findings; if none parse, the
+        // output is in a shape togi does not recognize, and reporting a
+        // clean run would hide whatever panache found.
+        if output.status.code() == Some(1) && diagnostics.is_empty() {
+            return Err(unreadable_findings("panache lint", &stderr));
+        }
+        Ok(diagnostics)
     }
 }
 
@@ -261,6 +274,27 @@ fn run_failure(what: &str, output: &std::process::Output, stderr: &str) -> anyho
         .hint(
             "check the reported files and any `[tools.panache] args` in togi.toml; \
              rerun with -v for the full tool output",
+        )
+        .unwrap_err()
+}
+
+/// The error for a panache run that exited as if it had findings but
+/// printed none that togi could read.
+fn unreadable_findings(what: &str, stderr: &str) -> anyhow::Error {
+    let detail = stderr.trim();
+    let message = if detail.is_empty() {
+        format!(
+            "{what} failed (exit code 1): panache reported findings, but togi could not read them"
+        )
+    } else {
+        format!(
+            "{what} failed (exit code 1): panache reported findings, but togi could not read them:\n{detail}"
+        )
+    };
+    Err::<(), _>(anyhow::anyhow!(message))
+        .hint(
+            "rerun with -v to see panache's full output; if togi.toml pins \
+             `[tools.panache] version`, try the version `togi version` lists",
         )
         .unwrap_err()
 }
@@ -540,6 +574,34 @@ mod tests {
     }
 
     #[test]
+    fn lint_findings_exit1_fixture_parses_every_diagnostic() {
+        let diagnostics = parse_short_diagnostics(&fixture("lint-findings-exit1.stdout.txt"));
+        assert_eq!(diagnostics.len(), 3);
+
+        let undefined = &diagnostics[0];
+        assert_eq!(undefined.path, PathBuf::from("/project/lint-findings.qmd"));
+        let range = undefined.range.expect("has a position");
+        assert_eq!((range.start.line, range.start.col), (6, 5));
+        assert_eq!(undefined.code.as_deref(), Some("F821"));
+        assert_eq!(undefined.severity, Severity::Error);
+        assert_eq!(undefined.message, "Undefined name `dropcols`");
+
+        assert_eq!(diagnostics[1].code.as_deref(), Some("F401"));
+        assert_eq!(diagnostics[1].severity, Severity::Error);
+        assert_eq!(
+            diagnostics[2].code.as_deref(),
+            Some("undefined-reference-label")
+        );
+        assert_eq!(diagnostics[2].severity, Severity::Warning);
+
+        // The stderr side of a findings run carries only the summary, so
+        // it holds nothing that marks the run as failed.
+        let stderr = fixture("lint-findings-exit1.stderr.txt");
+        assert_eq!(stderr_error(&stderr), None);
+        assert!(parse_short_diagnostics(&stderr).is_empty());
+    }
+
+    #[test]
     fn severity_tokens_map_onto_the_normalized_scale() {
         for (token, expected) in [
             ("error", Severity::Error),
@@ -560,6 +622,7 @@ mod tests {
             "",
             "Found 4 issue(s)",
             "Found 4 issue(s) across 1 file(s)",
+            "Found 1 issue(s) in report.qmd (no auto-fix available)",
             "some prose with a colon: in it",
         ] {
             assert_eq!(parse_short_line(line), None, "line {line:?}");
@@ -775,6 +838,14 @@ mod tests {
         /// environment; serialize the tests that assert on it.
         static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+        /// Take [`ENV_LOCK`], ignoring poison so one failing test does not
+        /// cascade into every other test that shares the lock.
+        fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+            ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        }
+
         struct Harness {
             dir: tempfile::TempDir,
             provider: FakeToolPaths,
@@ -785,6 +856,12 @@ mod tests {
             /// `air`/`ruff` binaries in two distinct directories, and a
             /// provider resolving all three.
             fn new(stdout_body: &str, exit_code: i32) -> Harness {
+                Harness::with_stderr(stdout_body, "", exit_code)
+            }
+
+            /// [`Harness::new`] whose fake panache also writes `stderr_body`
+            /// to stderr before exiting.
+            fn with_stderr(stdout_body: &str, stderr_body: &str, exit_code: i32) -> Harness {
                 use std::os::unix::fs::PermissionsExt;
                 let dir = tempfile::tempdir().expect("tempdir");
                 let record = dir.path().join("record.txt");
@@ -795,6 +872,7 @@ mod tests {
                         "#!/bin/sh\n\
                          {{ echo \"args:$@\"; echo \"path:$PATH\"; }} > \"{record}\"\n\
                          cat <<'TOGI_EOF'\n{stdout_body}\nTOGI_EOF\n\
+                         cat >&2 <<'TOGI_EOF'\n{stderr_body}\nTOGI_EOF\n\
                          exit {exit_code}\n",
                         record = record.display(),
                     ),
@@ -840,7 +918,7 @@ mod tests {
 
         #[test]
         fn format_invokes_panache_with_default_config_and_managed_tools_on_path() {
-            let _env = ENV_LOCK.lock().unwrap();
+            let _env = env_lock();
             let harness = Harness::new("Formatted a.qmd\n1 file reformatted", 0);
             let config = Config::default();
             let ctx = ToolCtx::new(&harness.provider, &config, false);
@@ -877,7 +955,7 @@ mod tests {
 
         #[test]
         fn check_mode_passes_check_and_parses_the_diff_output() {
-            let _env = ENV_LOCK.lock().unwrap();
+            let _env = env_lock();
             let harness =
                 Harness::new("Diff in a.qmd:4:\n-x\n+y\n---\nDiff in a.qmd:9:\n-x\n+y", 1);
             let config = Config::default();
@@ -895,7 +973,7 @@ mod tests {
 
         #[test]
         fn a_project_config_suppresses_the_generated_default() {
-            let _env = ENV_LOCK.lock().unwrap();
+            let _env = env_lock();
             let harness = Harness::new("", 0);
             fs::write(harness.dir.path().join("panache.toml"), "").expect("project config");
             let config = Config::default();
@@ -915,7 +993,7 @@ mod tests {
 
         #[test]
         fn discovery_follows_the_files_not_the_working_directory() {
-            let _env = ENV_LOCK.lock().unwrap();
+            let _env = env_lock();
             let harness = Harness::new("", 0);
             // A project rooted inside the harness dir: its own config plus
             // a `.git` boundary so the walk never escapes into the real
@@ -942,7 +1020,7 @@ mod tests {
 
         #[test]
         fn a_configless_project_still_gets_the_generated_default() {
-            let _env = ENV_LOCK.lock().unwrap();
+            let _env = env_lock();
             let harness = Harness::new("", 0);
             let project = harness.dir.path().join("proj");
             fs::create_dir_all(project.join(".git")).expect("git dir");
@@ -961,7 +1039,7 @@ mod tests {
 
         #[test]
         fn files_panache_skips_as_missing_are_not_counted_as_processed() {
-            let _env = ENV_LOCK.lock().unwrap();
+            let _env = env_lock();
             let dir = tempfile::tempdir().expect("tempdir");
             let panache = dir.path().join("panache");
             // Recorded panache 2.60.0 behavior (format-missing-path.txt):
@@ -1001,7 +1079,7 @@ mod tests {
 
         #[test]
         fn escape_hatch_args_are_appended_before_the_files() {
-            let _env = ENV_LOCK.lock().unwrap();
+            let _env = env_lock();
             let harness = Harness::new("", 0);
             let mut config = Config::default();
             config
@@ -1024,7 +1102,7 @@ mod tests {
 
         #[test]
         fn lint_passes_fix_and_parses_short_diagnostics() {
-            let _env = ENV_LOCK.lock().unwrap();
+            let _env = env_lock();
             let harness = Harness::new(
                 "a.qmd:7:4: warning[missing-chunk-labels]: no label\n\nFound 1 issue(s)",
                 0,
@@ -1047,8 +1125,175 @@ mod tests {
         }
 
         #[test]
+        fn lint_findings_with_exit_1_are_diagnostics_not_a_failure() {
+            let _env = env_lock();
+            // panache exits 1 whenever lint finds anything: findings on
+            // stdout, only a summary on stderr.
+            let harness = Harness::with_stderr(
+                fixture("lint-findings-exit1.stdout.txt").trim_end(),
+                fixture("lint-findings-exit1.stderr.txt").trim_end(),
+                1,
+            );
+            let config = Config::default();
+            let ctx = ToolCtx::new(&harness.provider, &config, false);
+
+            let diagnostics = harness
+                .adapter()
+                .lint(&paths(&["lint-findings.qmd", "README.md"]), false, &ctx)
+                .expect("exit 1 with findings is a successful lint run");
+
+            let codes: Vec<Option<&str>> = diagnostics.iter().map(|d| d.code.as_deref()).collect();
+            assert_eq!(
+                codes,
+                vec![
+                    Some("F821"),
+                    Some("F401"),
+                    Some("undefined-reference-label")
+                ]
+            );
+            assert_eq!(diagnostics[0].severity, Severity::Error);
+            assert_eq!(diagnostics[0].message, "Undefined name `dropcols`");
+        }
+
+        #[test]
+        fn lint_exit_1_with_an_error_line_is_a_failure() {
+            let _env = env_lock();
+            let harness = Harness::with_stderr(
+                "",
+                "Warning: Path not found: nope.qmd\nError: No supported files found",
+                1,
+            );
+            let config = Config::default();
+            let ctx = ToolCtx::new(&harness.provider, &config, false);
+
+            let err = harness
+                .adapter()
+                .lint(&paths(&["nope.qmd"]), false, &ctx)
+                .expect_err("an Error: line on stderr is a failed run");
+            let rendered = crate::term::render_error(&err, false);
+            assert!(
+                rendered.contains("No supported files found"),
+                "names the cause: {rendered}"
+            );
+            assert!(rendered.contains("hint:"), "says what to do: {rendered}");
+        }
+
+        #[test]
+        fn lint_exit_1_without_readable_findings_is_a_failure() {
+            let _env = env_lock();
+            // Exit 1 claims findings; if none parse, togi could not read
+            // what panache reported and must not report a clean run.
+            for stdout in ["", "\nFound 0 issue(s)"] {
+                let harness =
+                    Harness::with_stderr(stdout, "\nFound 2 issue(s) across 1 file(s)", 1);
+                let config = Config::default();
+                let ctx = ToolCtx::new(&harness.provider, &config, false);
+
+                let err = harness
+                    .adapter()
+                    .lint(&paths(&["a.qmd"]), false, &ctx)
+                    .expect_err("exit 1 with no readable findings is a failed run");
+                let rendered = crate::term::render_error(&err, false);
+                assert!(rendered.contains("exit code 1"), "{rendered}");
+                assert!(
+                    rendered.contains("could not read"),
+                    "says the output was unreadable: {rendered}"
+                );
+                assert!(rendered.contains("hint:"), "says what to do: {rendered}");
+            }
+        }
+
+        #[test]
+        fn lint_exit_0_without_findings_is_success() {
+            let _env = env_lock();
+            let harness = Harness::with_stderr("", "", 0);
+            let config = Config::default();
+            let ctx = ToolCtx::new(&harness.provider, &config, false);
+
+            let diagnostics = harness
+                .adapter()
+                .lint(&paths(&["a.qmd"]), false, &ctx)
+                .expect("exit 0 with no findings is a clean run");
+            assert!(diagnostics.is_empty());
+        }
+
+        #[test]
+        fn lint_exit_1_with_findings_and_an_error_line_is_a_failure() {
+            let _env = env_lock();
+            let harness = Harness::with_stderr(
+                fixture("lint-findings-exit1.stdout.txt").trim_end(),
+                "Error: invalid config file",
+                1,
+            );
+            let config = Config::default();
+            let ctx = ToolCtx::new(&harness.provider, &config, false);
+
+            let err = harness
+                .adapter()
+                .lint(&paths(&["lint-findings.qmd"]), false, &ctx)
+                .expect_err("an Error: line fails the run even alongside findings");
+            let rendered = crate::term::render_error(&err, false);
+            assert!(
+                rendered.contains("invalid config file"),
+                "names the cause: {rendered}"
+            );
+        }
+
+        #[test]
+        fn lint_exit_1_with_findings_and_a_missing_path_warning_keeps_the_findings() {
+            let _env = env_lock();
+            let harness = Harness::with_stderr(
+                fixture("lint-findings-exit1.stdout.txt").trim_end(),
+                "Warning: Path not found: nope.qmd\n\nFound 3 issue(s) across 2 file(s)",
+                1,
+            );
+            let config = Config::default();
+            let ctx = ToolCtx::new(&harness.provider, &config, false);
+
+            let diagnostics = harness
+                .adapter()
+                .lint(
+                    &paths(&["lint-findings.qmd", "README.md", "nope.qmd"]),
+                    false,
+                    &ctx,
+                )
+                .expect("a missing-path warning is not a failed run");
+
+            let codes: Vec<Option<&str>> = diagnostics.iter().map(|d| d.code.as_deref()).collect();
+            assert_eq!(
+                codes,
+                vec![
+                    Some("F821"),
+                    Some("F401"),
+                    Some("undefined-reference-label")
+                ]
+            );
+        }
+
+        #[test]
+        fn lint_exit_2_is_a_failure() {
+            let _env = env_lock();
+            // clap's usage-error exit code.
+            let harness = Harness::with_stderr(
+                "",
+                "error: unexpected argument '--bogus' found\n\n\
+                 Usage: panache lint [OPTIONS] [FILES]...",
+                2,
+            );
+            let config = Config::default();
+            let ctx = ToolCtx::new(&harness.provider, &config, false);
+
+            let err = harness
+                .adapter()
+                .lint(&paths(&["a.qmd"]), false, &ctx)
+                .expect_err("exit 2 is a failed run");
+            let rendered = crate::term::render_error(&err, false);
+            assert!(rendered.contains("exit code 2"), "{rendered}");
+        }
+
+        #[test]
         fn a_failing_run_reports_the_stderr_error_with_a_hint() {
-            let _env = ENV_LOCK.lock().unwrap();
+            let _env = env_lock();
             let dir = tempfile::tempdir().expect("tempdir");
             let panache = dir.path().join("panache");
             fs::write(
@@ -1189,5 +1434,42 @@ x = df[df[\"a\"] != True]\n\
         assert_eq!(fixed, DOCUMENT, "plain --fix must not apply unsafe edits");
         assert!(fixed.contains("x = df[df[\"a\"] != True]"));
         assert!(!fixed.contains("x = df[not df[\"a\"]]"));
+    }
+
+    /// Downloads the real pinned panache and Ruff releases and verifies
+    /// that a Ruff finding in an embedded Python chunk surfaces as a
+    /// diagnostic, even though panache exits non-zero when it finds one.
+    #[test]
+    #[ignore = "downloads real releases from GitHub"]
+    fn lint_reports_an_undefined_name_in_a_python_chunk() {
+        const DOCUMENT: &str = "\
+```{python}\n\
+x = dropcols\n\
+```\n";
+
+        let cache = tempfile::tempdir().expect("cache dir");
+        let project = tempfile::tempdir().expect("project dir");
+        let document = project.path().join("analysis.qmd");
+        std::fs::write(&document, DOCUMENT).expect("write qmd");
+
+        let provider = DownloadedTools {
+            cache_root: cache.path().to_path_buf(),
+        };
+        let config = Config::default();
+        let ctx = ToolCtx::new(&provider, &config, false);
+        let adapter = PanacheAdapter::with_config_search(
+            project.path(),
+            &project.path().join("no-user-config.toml"),
+        );
+
+        let diagnostics = adapter
+            .lint(std::slice::from_ref(&document), false, &ctx)
+            .expect("lint findings are diagnostics, not a failed run");
+
+        let undefined = diagnostics
+            .iter()
+            .find(|d| d.code.as_deref() == Some("F821"))
+            .unwrap_or_else(|| panic!("an F821 diagnostic: {diagnostics:?}"));
+        assert!(undefined.message.contains("dropcols"), "{undefined:?}");
     }
 }

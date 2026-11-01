@@ -13,10 +13,14 @@
 //!   errors, which instead print `Error: ...` lines to stderr.
 //! - `panache lint --message-format short <files...>` prints one
 //!   diagnostic per line as `path:line:col: severity[code]: message`,
-//!   grouped per file with a trailing `Found N issue(s)` summary per
-//!   group. Without `--check` the exit code is 0 even when there are
-//!   findings, so a non-zero exit means the run itself failed. `--fix`
-//!   applies safe autofixes and reports what remains. Short output does
+//!   grouped per file. Exit 0 when there are no findings and exit 1 when
+//!   there are, with a blank line and a `Found N issue(s) across M
+//!   file(s)` summary on stderr. Real failures (no supported files, an
+//!   invalid config) also exit 1 but print `Error: ...` lines to stderr;
+//!   usage errors exit 2. A missing path among real files only prints
+//!   `Warning: Path not found: ...` and is not a failure. `--fix` applies
+//!   safe autofixes, exits 0, and reports what remains with lines such as
+//!   `Found 1 issue(s) in <path> (no auto-fix available)`. Short output does
 //!   not say whether a finding is fixable, so [`Diagnostic::fixable`] is
 //!   always `false` here.
 //! - External formatters are **opt-in** via the `[formatters]` table of
@@ -228,10 +232,11 @@ impl Linter for PanacheAdapter {
             args.push("--fix");
         }
         let output = self.run(&args, files, ctx)?;
-        // Without --check, findings still exit 0; non-zero is a real
-        // failure (unreadable file, bad flag, ...).
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Exit 1 just means "found something"; real failures are Error
+        // lines on stderr (or an unexpected exit code, such as 2 for a
+        // usage error).
+        if !matches!(output.status.code(), Some(0 | 1)) || stderr_error(&stderr).is_some() {
             return Err(run_failure("panache lint", &output, &stderr));
         }
         Ok(parse_short_diagnostics(&String::from_utf8_lossy(
@@ -588,6 +593,7 @@ mod tests {
             "",
             "Found 4 issue(s)",
             "Found 4 issue(s) across 1 file(s)",
+            "Found 1 issue(s) in report.qmd (no auto-fix available)",
             "some prose with a colon: in it",
         ] {
             assert_eq!(parse_short_line(line), None, "line {line:?}");
@@ -1141,6 +1147,59 @@ mod tests {
                 "names the cause: {rendered}"
             );
             assert!(rendered.contains("hint:"), "says what to do: {rendered}");
+        }
+
+        #[test]
+        fn lint_exit_1_with_findings_and_an_error_line_is_a_failure() {
+            let _env = env_lock();
+            let harness = Harness::with_stderr(
+                fixture("lint-findings-exit1.stdout.txt").trim_end(),
+                "Error: invalid config file",
+                1,
+            );
+            let config = Config::default();
+            let ctx = ToolCtx::new(&harness.provider, &config, false);
+
+            let err = harness
+                .adapter()
+                .lint(&paths(&["lint-findings.qmd"]), false, &ctx)
+                .expect_err("an Error: line fails the run even alongside findings");
+            let rendered = crate::term::render_error(&err, false);
+            assert!(
+                rendered.contains("invalid config file"),
+                "names the cause: {rendered}"
+            );
+        }
+
+        #[test]
+        fn lint_exit_1_with_findings_and_a_missing_path_warning_keeps_the_findings() {
+            let _env = env_lock();
+            let harness = Harness::with_stderr(
+                fixture("lint-findings-exit1.stdout.txt").trim_end(),
+                "Warning: Path not found: nope.qmd\n\nFound 3 issue(s) across 2 file(s)",
+                1,
+            );
+            let config = Config::default();
+            let ctx = ToolCtx::new(&harness.provider, &config, false);
+
+            let diagnostics = harness
+                .adapter()
+                .lint(
+                    &paths(&["lint-findings.qmd", "README.md", "nope.qmd"]),
+                    false,
+                    &ctx,
+                )
+                .expect("a missing-path warning is not a failed run");
+
+            let codes: Vec<Option<&str>> = diagnostics.iter().map(|d| d.code.as_deref()).collect();
+            assert_eq!(
+                codes,
+                vec![
+                    Some("F821"),
+                    Some("F401"),
+                    Some("undefined-reference-label")
+                ]
+            );
         }
 
         #[test]

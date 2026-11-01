@@ -806,9 +806,10 @@ exit 1
         sb.cmd(&["lint"])
             .assert()
             .code(1)
-            .stdout(predicate::str::contains(
-                "report.qmd:6:5: F821 Undefined name `dropcols`",
-            ))
+            .stdout(
+                predicate::str::contains("report.qmd:6:5: F821 Undefined name `dropcols`")
+                    .and(predicate::str::contains(sb.project.display().to_string()).not()),
+            )
             .stderr(
                 predicate::str::contains("found 1 issue")
                     .and(predicate::str::contains("could not run").not())

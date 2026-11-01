@@ -54,7 +54,7 @@ pub fn label_for(name: &str) -> &'static str {
         "air" => "R formatter",
         "deptry" => "Python dependency checker",
         "ruff" => "Python formatter/linter",
-        "panache" => "Markdown formatter",
+        "panache" => "Markdown formatter/linter",
         "sqlfluff" => "SQL formatter/linter",
         "uv" => "uv (Python tool installer)",
         _ => "tool",

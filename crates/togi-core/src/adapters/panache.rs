@@ -13,9 +13,12 @@
 //!   errors, which instead print `Error: ...` lines to stderr.
 //! - `panache lint --message-format short <files...>` prints one
 //!   diagnostic per line as `path:line:col: severity[code]: message`,
-//!   grouped per file. Exit 0 when there are no findings and exit 1 when
-//!   there are, with a blank line and a `Found N issue(s) across M
-//!   file(s)` summary on stderr. Real failures (no supported files, an
+//!   grouped per file, each group followed by a blank line and a
+//!   `Found N issue(s)` summary line on stdout that the parser skips. Exit
+//!   0 when there are no findings and exit 1 when there are, with a blank
+//!   line and a `Found N issue(s) across M file(s)` summary on stderr. An
+//!   exit 1 whose stdout yields no readable diagnostic is treated as a
+//!   failure rather than a clean run. Real failures (no supported files, an
 //!   invalid config) also exit 1 but print `Error: ...` lines to stderr;
 //!   usage errors exit 2. A missing path among real files only prints
 //!   `Warning: Path not found: ...` and is not a failure. `--fix` applies
@@ -239,9 +242,14 @@ impl Linter for PanacheAdapter {
         if !matches!(output.status.code(), Some(0 | 1)) || stderr_error(&stderr).is_some() {
             return Err(run_failure("panache lint", &output, &stderr));
         }
-        Ok(parse_short_diagnostics(&String::from_utf8_lossy(
-            &output.stdout,
-        )))
+        let diagnostics = parse_short_diagnostics(&String::from_utf8_lossy(&output.stdout));
+        // Exit 1 without an Error line claims findings; if none parse, the
+        // output is in a shape togi does not recognize, and reporting a
+        // clean run would hide whatever panache found.
+        if output.status.code() == Some(1) && diagnostics.is_empty() {
+            return Err(unreadable_findings("panache lint", &stderr));
+        }
+        Ok(diagnostics)
     }
 }
 
@@ -266,6 +274,27 @@ fn run_failure(what: &str, output: &std::process::Output, stderr: &str) -> anyho
         .hint(
             "check the reported files and any `[tools.panache] args` in togi.toml; \
              rerun with -v for the full tool output",
+        )
+        .unwrap_err()
+}
+
+/// The error for a panache run that exited as if it had findings but
+/// printed none that togi could read.
+fn unreadable_findings(what: &str, stderr: &str) -> anyhow::Error {
+    let detail = stderr.trim();
+    let message = if detail.is_empty() {
+        format!(
+            "{what} failed (exit code 1): panache reported findings, but togi could not read them"
+        )
+    } else {
+        format!(
+            "{what} failed (exit code 1): panache reported findings, but togi could not read them:\n{detail}"
+        )
+    };
+    Err::<(), _>(anyhow::anyhow!(message))
+        .hint(
+            "rerun with -v to see panache's full output; if togi.toml pins \
+             `[tools.panache] version`, try the version `togi version` lists",
         )
         .unwrap_err()
 }
@@ -1147,6 +1176,45 @@ mod tests {
                 "names the cause: {rendered}"
             );
             assert!(rendered.contains("hint:"), "says what to do: {rendered}");
+        }
+
+        #[test]
+        fn lint_exit_1_without_readable_findings_is_a_failure() {
+            let _env = env_lock();
+            // Exit 1 claims findings; if none parse, togi could not read
+            // what panache reported and must not report a clean run.
+            for stdout in ["", "\nFound 0 issue(s)"] {
+                let harness =
+                    Harness::with_stderr(stdout, "\nFound 2 issue(s) across 1 file(s)", 1);
+                let config = Config::default();
+                let ctx = ToolCtx::new(&harness.provider, &config, false);
+
+                let err = harness
+                    .adapter()
+                    .lint(&paths(&["a.qmd"]), false, &ctx)
+                    .expect_err("exit 1 with no readable findings is a failed run");
+                let rendered = crate::term::render_error(&err, false);
+                assert!(rendered.contains("exit code 1"), "{rendered}");
+                assert!(
+                    rendered.contains("could not read"),
+                    "says the output was unreadable: {rendered}"
+                );
+                assert!(rendered.contains("hint:"), "says what to do: {rendered}");
+            }
+        }
+
+        #[test]
+        fn lint_exit_0_without_findings_is_success() {
+            let _env = env_lock();
+            let harness = Harness::with_stderr("", "", 0);
+            let config = Config::default();
+            let ctx = ToolCtx::new(&harness.provider, &config, false);
+
+            let diagnostics = harness
+                .adapter()
+                .lint(&paths(&["a.qmd"]), false, &ctx)
+                .expect("exit 0 with no findings is a clean run");
+            assert!(diagnostics.is_empty());
         }
 
         #[test]

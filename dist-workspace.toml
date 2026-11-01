@@ -30,3 +30,7 @@ dispatch-releases = true
 install-updater = false
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
+# Build Apple Silicon artifacts on macOS 15; GitHub retires the macOS 14
+# runner image that dist selects by default.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"

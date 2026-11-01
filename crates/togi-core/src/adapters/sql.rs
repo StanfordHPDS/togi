@@ -754,12 +754,6 @@ mod tests {
         fs::read_to_string(&path).unwrap_or_else(|e| panic!("read fixture {}: {e}", path.display()))
     }
 
-    fn strings(args: &[OsString]) -> Vec<String> {
-        args.iter()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect()
-    }
-
     // ---- recorded-output parsing -------------------------------------
 
     #[test]
@@ -833,9 +827,10 @@ mod tests {
         assert!(rendered.contains("hint:"), "{rendered}");
     }
 
-    // ---- dialect flag presence/absence -------------------------------
+    // ---- config environments ------------------------------------------
 
     /// A fresh project directory in a tempdir.
+    #[cfg(unix)]
     fn project() -> tempfile::TempDir {
         tempfile::tempdir().expect("tempdir")
     }
@@ -843,6 +838,7 @@ mod tests {
     /// A config environment rooted at `root`: it is both the home and the
     /// working directory, with no user-level directories, so config
     /// discovery for files under `root` never leaves it.
+    #[cfg(unix)]
     fn hermetic(root: &Path) -> ConfigEnv {
         ConfigEnv {
             home: Some(root.to_path_buf()),
@@ -852,227 +848,12 @@ mod tests {
     }
 
     /// `hermetic(root)` with the given user-level directories.
+    #[cfg(unix)]
     fn hermetic_with_user_dirs(root: &Path, user_dirs: Vec<PathBuf>) -> ConfigEnv {
         ConfigEnv {
             user_dirs,
             ..hermetic(root)
         }
-    }
-
-    /// `build_args` gated the way `run` gates it: a generated config path
-    /// (any path will do here) only when togi's defaults apply for a
-    /// project rooted at `root`.
-    fn gated_args(
-        subcommand: &[&str],
-        files: &[PathBuf],
-        config: &Config,
-        root: &Path,
-    ) -> Vec<String> {
-        let placeholder = Path::new("togi-default.cfg");
-        let default_config = default_config_needed(files, &hermetic(root)).then_some(placeholder);
-        strings(&build_args(subcommand, files, config, default_config))
-    }
-
-    #[test]
-    fn dialect_flag_present_without_project_sqlfluff_config() {
-        let dir = project();
-        let files = vec![dir.path().join("q.sql")];
-        let args = gated_args(&["lint"], &files, &Config::default(), dir.path());
-        let dialect_at = args.iter().position(|a| a == "--dialect");
-        let at = dialect_at.expect("no project config, so togi supplies the dialect");
-        assert_eq!(args[at + 1], "bigquery", "{args:?}");
-    }
-
-    #[test]
-    fn configured_dialect_is_passed_through() {
-        let dir = project();
-        let files = vec![dir.path().join("q.sql")];
-        let mut config = Config::default();
-        config.sql.dialect = "duckdb".to_string();
-        let args = gated_args(&["lint"], &files, &config, dir.path());
-        let at = args.iter().position(|a| a == "--dialect").expect("flag");
-        assert_eq!(args[at + 1], "duckdb", "{args:?}");
-    }
-
-    #[test]
-    fn dialect_flag_absent_with_project_dot_sqlfluff() {
-        let dir = project();
-        fs::write(dir.path().join(".sqlfluff"), "[sqlfluff]\ndialect = ansi\n")
-            .expect("write config");
-        let files = vec![dir.path().join("q.sql")];
-        let args = gated_args(&["lint"], &files, &Config::default(), dir.path());
-        assert!(
-            !args.contains(&"--dialect".to_string()),
-            "the project's own config wins: {args:?}"
-        );
-    }
-
-    #[test]
-    fn shared_config_files_count_only_with_a_sqlfluff_section() {
-        for (name, with_section, without_section) in [
-            ("setup.cfg", "[sqlfluff]\ndialect = ansi\n", "[metadata]\n"),
-            ("tox.ini", "[sqlfluff:rules]\nx = y\n", "[tox]\n"),
-            (
-                "pyproject.toml",
-                "[tool.sqlfluff.core]\ndialect = \"ansi\"\n",
-                "[tool.ruff]\n",
-            ),
-        ] {
-            let dir = project();
-            let files = vec![dir.path().join("q.sql")];
-
-            fs::write(dir.path().join(name), without_section).expect("write");
-            let args = gated_args(&["lint"], &files, &Config::default(), dir.path());
-            assert!(
-                args.contains(&"--dialect".to_string()),
-                "{name} without a sqlfluff section is not sqlfluff config: {args:?}"
-            );
-
-            fs::write(dir.path().join(name), with_section).expect("write");
-            let args = gated_args(&["lint"], &files, &Config::default(), dir.path());
-            assert!(
-                !args.contains(&"--dialect".to_string()),
-                "{name} with a sqlfluff section is project config: {args:?}"
-            );
-        }
-    }
-
-    /// Whether a project whose `pyproject.toml` holds `contents` counts as
-    /// having sqlfluff config.
-    fn pyproject_counts(contents: &[u8]) -> bool {
-        let dir = project();
-        fs::write(dir.path().join("pyproject.toml"), contents).expect("write");
-        let files = vec![dir.path().join("q.sql")];
-        !default_config_needed(&files, &hermetic(dir.path()))
-    }
-
-    #[test]
-    fn pyproject_counts_for_any_spelling_of_the_tool_sqlfluff_table() {
-        for contents in [
-            "[tool.sqlfluff]\n",
-            "[tool.sqlfluff.core]\nexclude_rules = \"CP02\"\n",
-            "[tool]\nsqlfluff = { core = { exclude_rules = \"CP02\" } }\n",
-            "tool.sqlfluff.core.exclude_rules = \"CP02\"\n",
-            "[tool.sqlfluff.rules.\"capitalisation.identifiers\"]\nx = 1\n",
-        ] {
-            assert!(pyproject_counts(contents.as_bytes()), "{contents}");
-        }
-    }
-
-    #[test]
-    fn pyproject_mentioning_sqlfluff_outside_the_table_does_not_count() {
-        for contents in [
-            "",
-            "[project]\nname = \"x\"\n",
-            "# [tool.sqlfluff]\n[tool.ruff]\n",
-            "[tool.ruff]\nnote = \"\"\"\n[tool.sqlfluff]\n\"\"\"\n",
-            "[tool.sqlfluffy]\nx = 1\n",
-            "[project.tool.sqlfluff]\nx = 1\n",
-        ] {
-            assert!(!pyproject_counts(contents.as_bytes()), "{contents}");
-        }
-    }
-
-    #[test]
-    fn pyproject_sqlfluff_cannot_load_counts_so_sqlfluff_reports_it() {
-        for contents in [
-            &b"[tool.sqlfluff\n"[..],
-            b"# \xff\n[tool.ruff]\n",
-            b"tool = 1\n",
-        ] {
-            assert!(
-                pyproject_counts(contents),
-                "{}",
-                String::from_utf8_lossy(contents)
-            );
-        }
-    }
-
-    #[test]
-    fn a_pyproject_toml_directory_counts_but_a_missing_file_does_not() {
-        let dir = project();
-        let files = vec![dir.path().join("q.sql")];
-        assert!(default_config_needed(&files, &hermetic(dir.path())));
-        fs::create_dir(dir.path().join("pyproject.toml")).expect("mkdir");
-        assert!(!default_config_needed(&files, &hermetic(dir.path())));
-    }
-
-    #[test]
-    fn config_in_a_parent_directory_within_the_project_counts() {
-        let dir = project();
-        fs::write(dir.path().join(".sqlfluff"), "[sqlfluff]\n").expect("write config");
-        let nested = dir.path().join("analysis/queries");
-        fs::create_dir_all(&nested).expect("mkdirs");
-        let files = vec![nested.join("q.sql")];
-        let args = gated_args(&["lint"], &files, &Config::default(), dir.path());
-        assert!(!args.contains(&"--dialect".to_string()), "{args:?}");
-    }
-
-    #[test]
-    fn repository_boundaries_do_not_stop_the_walk() {
-        // sqlfluff does not stop at `.git`: config between the repository
-        // and the home directory still applies.
-        let home = project();
-        let work = home.path().join("work");
-        let repo = work.join("repo");
-        fs::create_dir_all(repo.join(".git")).expect("mkdirs");
-        fs::write(work.join(".sqlfluff"), "[sqlfluff]\n").expect("write config");
-        let files = vec![repo.join("q.sql")];
-        let env = ConfigEnv {
-            home: Some(home.path().to_path_buf()),
-            cwd: Some(repo.clone()),
-            user_dirs: Vec::new(),
-        };
-        assert!(project_has_sqlfluff_config(&files, &env));
-        assert!(!default_config_needed(&files, &env));
-    }
-
-    #[test]
-    fn config_above_home_counts_only_on_the_working_directory_chain() {
-        let outer = project();
-        fs::write(outer.path().join(".sqlfluff"), "[sqlfluff]\n").expect("write config");
-        let home = outer.path().join("home");
-        let repo = home.join("repo");
-        fs::create_dir_all(&repo).expect("mkdirs");
-        let files = vec![repo.join("q.sql")];
-
-        let from_repo = ConfigEnv {
-            home: Some(home.clone()),
-            cwd: Some(repo.clone()),
-            user_dirs: Vec::new(),
-        };
-        assert!(
-            default_config_needed(&files, &from_repo),
-            "config above home is not read"
-        );
-
-        let from_outer = ConfigEnv {
-            cwd: Some(outer.path().to_path_buf()),
-            ..from_repo
-        };
-        assert!(
-            !default_config_needed(&files, &from_outer),
-            "the working directory's walk down to the file reads it"
-        );
-    }
-
-    #[test]
-    fn config_in_the_working_directory_counts_for_files_elsewhere() {
-        // sqlfluff's root config reads the working directory even when
-        // the files live in a sibling directory.
-        let home = project();
-        let cwd = home.path().join("run");
-        let elsewhere = home.path().join("data");
-        fs::create_dir_all(&cwd).expect("mkdirs");
-        fs::create_dir_all(&elsewhere).expect("mkdirs");
-        fs::write(cwd.join(".sqlfluff"), "[sqlfluff]\n").expect("write config");
-        let files = vec![elsewhere.join("q.sql")];
-        let env = ConfigEnv {
-            home: Some(home.path().to_path_buf()),
-            cwd: Some(cwd),
-            user_dirs: Vec::new(),
-        };
-        assert!(!default_config_needed(&files, &env));
     }
 
     // ---- search directory sets ----------------------------------------
@@ -1287,163 +1068,6 @@ mod tests {
         assert_eq!(dirs, paths(&[r"c:\users\U\a"]));
     }
 
-    #[test]
-    fn tools_sqlfluff_args_are_appended_between_defaults_and_files() {
-        let dir = project();
-        let file = dir.path().join("q.sql");
-        let files = vec![file.clone()];
-        let mut config = Config::default();
-        config.tools.args.insert(
-            TOOL.to_string(),
-            vec!["--templater".to_string(), "raw".to_string()],
-        );
-
-        let args = gated_args(&["format"], &files, &config, dir.path());
-        let templater_at = args.iter().position(|a| a == "--templater").expect("flag");
-        let dialect_at = args.iter().position(|a| a == "--dialect").expect("flag");
-        let file_at = args
-            .iter()
-            .position(|a| *a == file.to_string_lossy())
-            .expect("file");
-        assert!(
-            dialect_at < templater_at && templater_at < file_at,
-            "defaults, then escape hatch (so it can override), then files: {args:?}"
-        );
-        assert_eq!(args[0], "format", "{args:?}");
-        assert!(
-            args.contains(&"--disable-progress-bar".to_string()),
-            "{args:?}"
-        );
-    }
-
-    // ---- generated default config ------------------------------------
-
-    /// The `key = value` lines of `text` under the INI section `section`.
-    fn section_lines<'a>(text: &'a str, section: &str) -> Vec<&'a str> {
-        let header = format!("[{section}]");
-        let mut current: Option<&str> = None;
-        let mut lines = Vec::new();
-        for line in text.lines().map(str::trim) {
-            if line.starts_with('[') && line.ends_with(']') {
-                current = Some(line);
-            } else if current == Some(header.as_str()) && !line.is_empty() {
-                lines.push(line);
-            }
-        }
-        lines
-    }
-
-    #[test]
-    fn default_config_sets_the_intended_options_in_their_sections() {
-        let core = section_lines(DEFAULT_CONFIG, "sqlfluff");
-        assert!(
-            core.contains(&"large_file_skip_byte_limit = 0"),
-            "large files are linted, not skipped: {DEFAULT_CONFIG:?}"
-        );
-        let identifiers =
-            section_lines(DEFAULT_CONFIG, "sqlfluff:rules:capitalisation.identifiers");
-        assert!(
-            identifiers.contains(&"unquoted_identifiers_policy = none"),
-            "identifier capitalisation is left alone: {DEFAULT_CONFIG:?}"
-        );
-        assert!(
-            !core.contains(&"unquoted_identifiers_policy = none"),
-            "the policy belongs to the rule section, not the core one: {DEFAULT_CONFIG:?}"
-        );
-    }
-
-    #[test]
-    fn default_config_path_is_passed_after_dialect_and_before_escape_hatch_and_files() {
-        let dir = project();
-        let file = dir.path().join("q.sql");
-        let files = vec![file.clone()];
-        let mut config = Config::default();
-        config.tools.args.insert(
-            TOOL.to_string(),
-            vec!["--templater".to_string(), "raw".to_string()],
-        );
-        let generated = dir.path().join("generated.cfg");
-
-        let args = strings(&build_args(
-            &["lint"],
-            &files,
-            &config,
-            Some(generated.as_path()),
-        ));
-        let config_at = args
-            .iter()
-            .position(|a| a == "--config")
-            .unwrap_or_else(|| panic!("a generated config is passed: {args:?}"));
-        assert_eq!(args[config_at + 1], generated.to_string_lossy(), "{args:?}");
-        let dialect_at = args.iter().position(|a| a == "--dialect").expect("flag");
-        let templater_at = args.iter().position(|a| a == "--templater").expect("flag");
-        let file_at = args
-            .iter()
-            .position(|a| *a == file.to_string_lossy())
-            .expect("file");
-        assert!(
-            dialect_at < config_at && config_at < templater_at && templater_at < file_at,
-            "dialect, then generated config, then escape hatch, then files: {args:?}"
-        );
-    }
-
-    #[test]
-    fn neither_default_is_passed_without_a_generated_config() {
-        let dir = project();
-        let files = vec![dir.path().join("q.sql")];
-        let args = strings(&build_args(&["lint"], &files, &Config::default(), None));
-        assert!(!args.contains(&"--config".to_string()), "{args:?}");
-        assert!(!args.contains(&"--dialect".to_string()), "{args:?}");
-    }
-
-    #[test]
-    fn written_default_config_holds_exactly_the_default_settings() {
-        let file = write_default_config().expect("temp config");
-        let written = fs::read_to_string(file.path()).expect("read temp config");
-        assert_eq!(written, DEFAULT_CONFIG);
-    }
-
-    #[test]
-    fn default_config_is_needed_only_without_project_sqlfluff_config() {
-        let bare = project();
-        let with_dot_sqlfluff = project();
-        fs::write(with_dot_sqlfluff.path().join(".sqlfluff"), "[sqlfluff]\n")
-            .expect("write config");
-        let with_pyproject = project();
-        fs::write(
-            with_pyproject.path().join("pyproject.toml"),
-            "[tool.sqlfluff.core]\ndialect = \"ansi\"\n",
-        )
-        .expect("write config");
-
-        for (dir, needed) in [
-            (&bare, true),
-            (&with_dot_sqlfluff, false),
-            (&with_pyproject, false),
-        ] {
-            let files = vec![dir.path().join("q.sql")];
-            assert_eq!(
-                default_config_needed(&files, &hermetic(dir.path())),
-                needed,
-                "generated config needed in {}",
-                dir.path().display()
-            );
-            let args = gated_args(&["lint"], &files, &Config::default(), dir.path());
-            assert_eq!(
-                args.contains(&"--dialect".to_string()),
-                needed,
-                "dialect passed in {}: {args:?}",
-                dir.path().display()
-            );
-            assert_eq!(
-                args.contains(&"--config".to_string()),
-                needed,
-                "generated config passed in {}: {args:?}",
-                dir.path().display()
-            );
-        }
-    }
-
     // ---- user-level sqlfluff config -----------------------------------
 
     const ALL_PLATFORMS: [UserConfigPlatform; 3] = [
@@ -1608,69 +1232,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn default_config_is_needed_without_project_or_user_config() {
-        let dir = project();
-        let home = tempfile::tempdir().expect("tempdir");
-        let files = vec![dir.path().join("q.sql")];
-        let user_dirs = vec![
-            home.path().to_path_buf(),
-            home.path().join(".config/sqlfluff"),
-        ];
-        assert!(default_config_needed(
-            &files,
-            &hermetic_with_user_dirs(dir.path(), user_dirs)
-        ));
-    }
-
-    #[test]
-    fn default_config_is_not_needed_with_a_dot_sqlfluff_in_the_user_home() {
-        let dir = project();
-        let home = tempfile::tempdir().expect("tempdir");
-        fs::write(home.path().join(".sqlfluff"), "[sqlfluff]\n").expect("write config");
-        let files = vec![dir.path().join("q.sql")];
-        let user_dirs = vec![
-            home.path().to_path_buf(),
-            home.path().join(".config/sqlfluff"),
-        ];
-        assert!(
-            !default_config_needed(&files, &hermetic_with_user_dirs(dir.path(), user_dirs)),
-            "the user's own sqlfluff config wins"
-        );
-    }
-
-    #[test]
-    fn default_config_is_not_needed_with_a_sqlfluff_pyproject_in_the_user_appdir() {
-        let dir = project();
-        let home = tempfile::tempdir().expect("tempdir");
-        let appdir = home.path().join(".config/sqlfluff");
-        fs::create_dir_all(&appdir).expect("mkdirs");
-        fs::write(
-            appdir.join("pyproject.toml"),
-            "[tool.sqlfluff.core]\ndialect = \"ansi\"\n",
-        )
-        .expect("write config");
-        let files = vec![dir.path().join("q.sql")];
-        let user_dirs = vec![home.path().to_path_buf(), appdir];
-        assert!(
-            !default_config_needed(&files, &hermetic_with_user_dirs(dir.path(), user_dirs)),
-            "the user's own sqlfluff config wins"
-        );
-    }
-
-    #[test]
-    fn user_setup_cfg_without_a_sqlfluff_section_does_not_count() {
-        let dir = project();
-        let home = tempfile::tempdir().expect("tempdir");
-        fs::write(home.path().join("setup.cfg"), "[metadata]\nname = x\n").expect("write");
-        let files = vec![dir.path().join("q.sql")];
-        let user_dirs = vec![home.path().to_path_buf()];
-        assert!(default_config_needed(
-            &files,
-            &hermetic_with_user_dirs(dir.path(), user_dirs)
-        ));
-    }
-
     // ---- adapter behavior against a scripted tool --------------------
 
     /// Write an executable `sqlfluff` shell script whose body is `body`.
@@ -1693,180 +1254,10 @@ mod tests {
         ToolCtx::new(provider.as_ref().expect("just set"), config, false)
     }
 
-    /// A fake sqlfluff that, while it runs, records its arguments, whether
-    /// the path after `--config` exists, and that file's contents, then
-    /// reports no findings.
-    #[cfg(unix)]
-    fn recording_sqlfluff(dir: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
-        let args_record = dir.join("args.txt");
-        let exists_record = dir.join("config-exists.txt");
-        let contents_record = dir.join("config-contents.txt");
-        let script = fake_sqlfluff(
-            dir,
-            &format!(
-                r#"printf '%s\n' "$@" > "{args}"
-prev=""
-for arg in "$@"; do
-  if [ "$prev" = "--config" ]; then
-    if [ -f "$arg" ]; then
-      echo yes > "{exists}"
-      cat "$arg" > "{contents}"
-    else
-      echo no > "{exists}"
-    fi
-  fi
-  prev="$arg"
-done
-echo '[]'
-exit 0"#,
-                args = args_record.display(),
-                exists = exists_record.display(),
-                contents = contents_record.display()
-            ),
-        );
-        (script, args_record, exists_record, contents_record)
-    }
-
-    /// An adapter whose config lookup stays inside `root` and whose user
-    /// level sees only a fresh empty home directory, returned alongside it
-    /// so it outlives the run.
-    #[cfg(unix)]
-    fn adapter_with_empty_user_home(root: &Path) -> (tempfile::TempDir, SqlFluffAdapter) {
-        let home = tempfile::tempdir().expect("tempdir");
-        let adapter = SqlFluffAdapter::with_config_env(hermetic_with_user_dirs(
-            root,
-            vec![
-                home.path().to_path_buf(),
-                home.path().join(".config/sqlfluff"),
-            ],
-        ));
-        (home, adapter)
-    }
-
     /// An adapter whose config lookup stays inside `root`.
     #[cfg(unix)]
     fn hermetic_adapter(root: &Path) -> SqlFluffAdapter {
         SqlFluffAdapter::with_config_env(hermetic(root))
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn runs_pass_no_togi_defaults_with_user_level_sqlfluff_config() {
-        let dir = project();
-        let sql = dir.path().join("q.sql");
-        fs::write(&sql, "select 1\n").expect("write");
-        let (script, args_record, exists_record, _) = recording_sqlfluff(dir.path());
-        let home = tempfile::tempdir().expect("tempdir");
-        fs::write(
-            home.path().join(".sqlfluff"),
-            "[sqlfluff]\ndialect = ansi\n",
-        )
-        .expect("write config");
-        let adapter = SqlFluffAdapter::with_config_env(hermetic_with_user_dirs(
-            dir.path(),
-            vec![
-                home.path().to_path_buf(),
-                home.path().join(".config/sqlfluff"),
-            ],
-        ));
-
-        let mut provider = None;
-        let config = Config::default();
-        let ctx = ctx_with_script(&script, &mut provider, &config);
-        adapter
-            .lint(std::slice::from_ref(&sql), false, &ctx)
-            .expect("lint");
-
-        let args = fs::read_to_string(&args_record).expect("script ran");
-        let args: Vec<&str> = args.lines().collect();
-        assert!(!args.contains(&"--config"), "{args:?}");
-        assert!(!args.contains(&"--dialect"), "{args:?}");
-        assert!(!exists_record.exists(), "no config path was passed");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn runs_pass_a_live_generated_config_without_project_sqlfluff_config() {
-        let dir = project();
-        let sql = dir.path().join("q.sql");
-        fs::write(&sql, "select 1\n").expect("write");
-        let (script, args_record, exists_record, contents_record) = recording_sqlfluff(dir.path());
-
-        let mut provider = None;
-        let config = Config::default();
-        let ctx = ctx_with_script(&script, &mut provider, &config);
-        let (_home, adapter) = adapter_with_empty_user_home(dir.path());
-        let diagnostics = adapter
-            .lint(std::slice::from_ref(&sql), false, &ctx)
-            .expect("lint");
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-
-        let args = fs::read_to_string(&args_record).expect("script ran");
-        let args: Vec<&str> = args.lines().collect();
-        assert!(args.contains(&"--config"), "{args:?}");
-        assert!(args.contains(&"--dialect"), "{args:?}");
-        let exists = fs::read_to_string(&exists_record).expect("config flag seen");
-        assert_eq!(
-            exists.trim(),
-            "yes",
-            "the generated config exists during the run"
-        );
-        let contents = fs::read_to_string(&contents_record).expect("config copied");
-        assert_eq!(contents, DEFAULT_CONFIG);
-        assert!(contents.contains("unquoted_identifiers_policy = none"));
-        assert!(contents.contains("large_file_skip_byte_limit = 0"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn check_mode_runs_pass_a_live_generated_config_too() {
-        let dir = project();
-        let sql = dir.path().join("q.sql");
-        fs::write(&sql, "select 1\n").expect("write");
-        let (script, _, exists_record, contents_record) = recording_sqlfluff(dir.path());
-
-        let mut provider = None;
-        let config = Config::default();
-        let ctx = ctx_with_script(&script, &mut provider, &config);
-        let (_home, adapter) = adapter_with_empty_user_home(dir.path());
-        let outcome = adapter
-            .format(std::slice::from_ref(&sql), true, &ctx)
-            .expect("format --check");
-        assert!(outcome.changed.is_empty(), "{:?}", outcome.changed);
-
-        let exists = fs::read_to_string(&exists_record).expect("config flag seen");
-        assert_eq!(
-            exists.trim(),
-            "yes",
-            "the generated config exists during the run"
-        );
-        let contents = fs::read_to_string(&contents_record).expect("config copied");
-        assert_eq!(contents, DEFAULT_CONFIG);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn runs_pass_no_togi_defaults_with_project_sqlfluff_config() {
-        let dir = project();
-        fs::write(dir.path().join(".sqlfluff"), "[sqlfluff]\ndialect = ansi\n")
-            .expect("write config");
-        let sql = dir.path().join("q.sql");
-        fs::write(&sql, "select 1\n").expect("write");
-        let (script, args_record, exists_record, _) = recording_sqlfluff(dir.path());
-
-        let mut provider = None;
-        let config = Config::default();
-        let ctx = ctx_with_script(&script, &mut provider, &config);
-        let (_home, adapter) = adapter_with_empty_user_home(dir.path());
-        adapter
-            .lint(std::slice::from_ref(&sql), false, &ctx)
-            .expect("lint");
-
-        let args = fs::read_to_string(&args_record).expect("script ran");
-        let args: Vec<&str> = args.lines().collect();
-        assert!(!args.contains(&"--config"), "{args:?}");
-        assert!(!args.contains(&"--dialect"), "{args:?}");
-        assert!(!exists_record.exists(), "no config path was passed");
     }
 
     #[cfg(unix)]
@@ -2047,6 +1438,932 @@ exit 2"#,
         let rendered = crate::term::render_error(&err, false);
         assert!(rendered.contains("Unknown dialect"), "{rendered}");
         assert!(rendered.contains("togi.toml"), "{rendered}");
+    }
+
+    // ---- togi's defaults layered under discovered config ---------------
+
+    /// togi's defaults applied key by key under whatever sqlfluff config
+    /// applies to each file, observed through a fake sqlfluff that records
+    /// every run.
+    #[cfg(unix)]
+    mod merged_defaults {
+        use super::*;
+
+        const CORE: &str = "sqlfluff";
+        const IDENTIFIERS: &str = "sqlfluff:rules:capitalisation.identifiers";
+
+        /// One `(section, key, value)` an INI file sets.
+        type Setting = (String, String, String);
+
+        fn setting(section: &str, key: &str, value: &str) -> Setting {
+            (section.to_string(), key.to_string(), value.to_string())
+        }
+
+        fn dialect(value: &str) -> Setting {
+            setting(CORE, "dialect", value)
+        }
+
+        fn large_files() -> Setting {
+            setting(CORE, "large_file_skip_byte_limit", "0")
+        }
+
+        fn policy() -> Setting {
+            setting(IDENTIFIERS, "unquoted_identifiers_policy", "none")
+        }
+
+        /// The settings a generated config is expected to hold, sorted.
+        fn want(settings: &[Setting]) -> Option<Vec<Setting>> {
+            let mut settings = settings.to_vec();
+            settings.sort();
+            Some(settings)
+        }
+
+        /// Every setting in an INI text, sorted; comment and blank lines
+        /// are skipped.
+        fn ini_settings(text: &str) -> Vec<Setting> {
+            let mut section = String::new();
+            let mut settings = Vec::new();
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+                    continue;
+                }
+                if let Some(name) = trimmed.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+                    section = name.to_string();
+                } else if let Some((key, value)) = trimmed.split_once('=') {
+                    settings.push(setting(&section, key.trim(), value.trim()));
+                } else {
+                    panic!("unexpected line {line:?} in generated config:\n{text}");
+                }
+            }
+            settings.sort();
+            settings
+        }
+
+        /// How many times `[section]` appears as a header in `text`.
+        fn headers(text: &str, section: &str) -> usize {
+            let header = format!("[{section}]");
+            text.lines().filter(|l| l.trim() == header).count()
+        }
+
+        /// One recorded run of the fake sqlfluff.
+        #[derive(Debug)]
+        struct Invocation {
+            args: Vec<String>,
+            /// The contents of the file passed after `--config`, read while
+            /// the run was live; `None` without a `--config`.
+            config: Option<String>,
+            /// Whether a `--config` path was passed that did not exist
+            /// while the run was live.
+            config_missing: bool,
+        }
+
+        impl Invocation {
+            /// Every config path the run was given, as `--config X` or
+            /// `--config=X`.
+            fn config_flags(&self) -> Vec<&str> {
+                let mut flags = Vec::new();
+                for (i, arg) in self.args.iter().enumerate() {
+                    if arg == "--config" {
+                        if let Some(value) = self.args.get(i + 1) {
+                            flags.push(value.as_str());
+                        }
+                    } else if let Some(value) = arg.strip_prefix("--config=") {
+                        flags.push(value);
+                    }
+                }
+                flags
+            }
+
+            /// Whether `file` is among the run's arguments.
+            fn names(&self, file: &Path) -> bool {
+                self.args.iter().any(|a| Path::new(a) == file)
+            }
+
+            /// The settings of the config togi generated for this run, or
+            /// `None` when it passed none. Also checks what holds for
+            /// every generated config: the dialect is never a flag, only
+            /// one `--config` is passed, and it exists during the run.
+            fn generated(&self) -> Option<Vec<Setting>> {
+                assert!(
+                    !self
+                        .args
+                        .iter()
+                        .any(|a| a == "--dialect" || a.starts_with("--dialect=")),
+                    "the dialect belongs in the generated config, not a flag: {:?}",
+                    self.args
+                );
+                assert!(
+                    self.config_flags().len() <= 1,
+                    "sqlfluff reads only one --config: {:?}",
+                    self.args
+                );
+                assert!(
+                    !self.config_missing,
+                    "the generated config exists during the run: {:?}",
+                    self.args
+                );
+                self.config.as_deref().map(ini_settings)
+            }
+        }
+
+        /// The fake sqlfluff: records each run's arguments and its
+        /// `--config` file under `@RUNS@`; `format` and `fix` rewrite every
+        /// `.sql` argument to `select 1`, and `lint` reports one fixable
+        /// LT01 per `.sql` argument and exits 1.
+        const RECORDING_SHIM: &str = r#"rec=$(mktemp "@RUNS@/run.XXXXXX")
+printf '%s\n' "$@" > "$rec"
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--config" ]; then
+    if [ -f "$arg" ]; then cat "$arg" > "$rec.config"; else : > "$rec.missing"; fi
+  fi
+  prev="$arg"
+done
+if [ "$1" = "format" ] || [ "$1" = "fix" ]; then
+  for arg in "$@"; do
+    case "$arg" in *.sql) printf 'select 1\n' > "$arg" ;; esac
+  done
+  exit 0
+fi
+printf '['
+sep=""
+for arg in "$@"; do
+  case "$arg" in
+    *.sql)
+      printf '%s{"filepath":"%s","violations":[{"code":"LT01","description":"recorded","start_line_no":1,"start_line_pos":1,"fixes":[{}]}]}' "$sep" "$arg"
+      sep=","
+      ;;
+  esac
+done
+printf ']\n'
+exit 1"#;
+
+        /// Run `run` against a fresh recording sqlfluff and return every
+        /// recorded invocation (sorted by arguments) with its result.
+        fn record<T>(
+            adapter: &SqlFluffAdapter,
+            config: &Config,
+            run: impl FnOnce(&SqlFluffAdapter, &ToolCtx) -> T,
+        ) -> (Vec<Invocation>, T) {
+            let runs_dir = tempfile::tempdir().expect("tempdir");
+            let script = fake_sqlfluff(
+                runs_dir.path(),
+                &RECORDING_SHIM.replace("@RUNS@", &runs_dir.path().to_string_lossy()),
+            );
+            let mut provider = None;
+            let ctx = ctx_with_script(&script, &mut provider, config);
+            let result = run(adapter, &ctx);
+
+            let mut runs: Vec<Invocation> = fs::read_dir(runs_dir.path())
+                .expect("read runs")
+                .filter_map(|entry| {
+                    let path = entry.ok()?.path();
+                    let name = path.file_name()?.to_str()?.to_string();
+                    (name.starts_with("run.") && name.matches('.').count() == 1).then_some(path)
+                })
+                .map(|rec| {
+                    let args = fs::read_to_string(&rec).expect("read args");
+                    let sidecar = |ext: &str| PathBuf::from(format!("{}.{ext}", rec.display()));
+                    Invocation {
+                        args: args.lines().map(str::to_string).collect(),
+                        config: fs::read_to_string(sidecar("config")).ok(),
+                        config_missing: sidecar("missing").exists(),
+                    }
+                })
+                .collect();
+            runs.sort_by(|a, b| a.args.cmp(&b.args));
+            (runs, result)
+        }
+
+        fn lint_runs(
+            adapter: &SqlFluffAdapter,
+            config: &Config,
+            files: &[PathBuf],
+        ) -> (Vec<Invocation>, Vec<Diagnostic>) {
+            record(adapter, config, |a, ctx| {
+                a.lint(files, false, ctx).expect("lint")
+            })
+        }
+
+        /// The single run of a lint of `files` under `env`.
+        fn single_run(env: ConfigEnv, config: &Config, files: &[PathBuf]) -> Invocation {
+            let adapter = SqlFluffAdapter::with_config_env(env);
+            let (mut runs, _) = lint_runs(&adapter, config, files);
+            assert_eq!(runs.len(), 1, "one sqlfluff run: {runs:?}");
+            runs.remove(0)
+        }
+
+        /// The generated settings for a lint of `files` in one run.
+        fn generated_for(
+            env: ConfigEnv,
+            config: &Config,
+            files: &[PathBuf],
+        ) -> Option<Vec<Setting>> {
+            single_run(env, config, files).generated()
+        }
+
+        /// The generated settings for a lint of `q.sql` in a hermetic
+        /// project at `root`.
+        fn generated_in(root: &Path) -> Option<Vec<Setting>> {
+            generated_for(hermetic(root), &Config::default(), &[root.join("q.sql")])
+        }
+
+        /// The generated settings for a project whose only config is
+        /// `name` holding `contents`.
+        fn generated_with(name: &str, contents: &str) -> Option<Vec<Setting>> {
+            let dir = project();
+            fs::write(dir.path().join(name), contents).expect("write config");
+            generated_in(dir.path())
+        }
+
+        // -- which defaults are supplied --------------------------------
+
+        #[test]
+        fn without_any_config_every_default_goes_in_the_generated_config() {
+            let dir = project();
+            assert_eq!(
+                generated_in(dir.path()),
+                want(&[dialect("bigquery"), large_files(), policy()])
+            );
+        }
+
+        #[test]
+        fn the_configured_dialect_goes_in_the_generated_config() {
+            let dir = project();
+            let mut config = Config::default();
+            config.sql.dialect = "duckdb".to_string();
+            let files = vec![dir.path().join("q.sql")];
+            assert_eq!(
+                generated_for(hermetic(dir.path()), &config, &files),
+                want(&[dialect("duckdb"), large_files(), policy()])
+            );
+        }
+
+        #[test]
+        fn a_project_config_with_only_a_jinja_context_still_gets_every_default() {
+            assert_eq!(
+                generated_with(
+                    ".sqlfluff",
+                    "[sqlfluff:templater:jinja:context]\npred_year = 2016\n"
+                ),
+                want(&[dialect("bigquery"), large_files(), policy()])
+            );
+        }
+
+        #[test]
+        fn a_project_dialect_omits_only_the_dialect_default() {
+            for contents in [
+                "[sqlfluff]\ndialect = duckdb\n",
+                "[sqlfluff]\ndialect=duckdb\n",
+            ] {
+                assert_eq!(
+                    generated_with(".sqlfluff", contents),
+                    want(&[large_files(), policy()]),
+                    "{contents}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_project_setting_all_three_defaults_gets_no_generated_config() {
+            let contents = "[sqlfluff]\ndialect = ansi\nlarge_file_skip_byte_limit = 20000\n\n\
+                            [sqlfluff:rules:capitalisation.identifiers]\n\
+                            unquoted_identifiers_policy = all\n";
+            assert_eq!(generated_with(".sqlfluff", contents), None);
+        }
+
+        #[test]
+        fn a_general_rules_policy_counts_as_setting_the_policy() {
+            assert_eq!(
+                generated_with(
+                    ".sqlfluff",
+                    "[sqlfluff:rules]\nunquoted_identifiers_policy = all\n"
+                ),
+                want(&[dialect("bigquery"), large_files()])
+            );
+            assert_eq!(
+                generated_with(
+                    "pyproject.toml",
+                    "[tool.sqlfluff.rules]\nunquoted_identifiers_policy = \"all\"\n"
+                ),
+                want(&[dialect("bigquery"), large_files()])
+            );
+        }
+
+        #[test]
+        fn a_policy_for_another_rule_does_not_count() {
+            assert_eq!(
+                generated_with(
+                    ".sqlfluff",
+                    "[sqlfluff:rules:references.special_chars]\nunquoted_identifiers_policy = all\n"
+                ),
+                want(&[dialect("bigquery"), large_files(), policy()])
+            );
+        }
+
+        #[test]
+        fn pyproject_rule_tables_in_either_spelling_omit_only_the_policy_default() {
+            for contents in [
+                "[tool.sqlfluff.rules.\"capitalisation.identifiers\"]\n\
+                 unquoted_identifiers_policy = \"all\"\n",
+                "[tool.sqlfluff.rules.capitalisation.identifiers]\n\
+                 unquoted_identifiers_policy = \"all\"\n",
+            ] {
+                assert_eq!(
+                    generated_with("pyproject.toml", contents),
+                    want(&[dialect("bigquery"), large_files()]),
+                    "{contents}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_pyproject_core_dialect_in_any_spelling_omits_only_the_dialect_default() {
+            for contents in [
+                "[tool.sqlfluff.core]\ndialect = \"ansi\"\n",
+                "[tool]\nsqlfluff = { core = { dialect = \"ansi\" } }\n",
+                "tool.sqlfluff.core.dialect = \"ansi\"\n",
+            ] {
+                assert_eq!(
+                    generated_with("pyproject.toml", contents),
+                    want(&[large_files(), policy()]),
+                    "{contents}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_pyproject_without_sqlfluff_settings_changes_nothing() {
+            for contents in [
+                "",
+                "[project]\nname = \"x\"\n",
+                "# [tool.sqlfluff.core]\n# dialect = \"ansi\"\n[tool.ruff]\n",
+                "[tool.ruff]\nnote = \"\"\"\n[tool.sqlfluff.core]\ndialect = \"ansi\"\n\"\"\"\n",
+                "[tool.sqlfluffy.core]\ndialect = \"ansi\"\n",
+                "[project.tool.sqlfluff.core]\ndialect = \"ansi\"\n",
+                "[tool.sqlfluff.core]\nexclude_rules = \"CP02\"\n",
+            ] {
+                assert_eq!(
+                    generated_with("pyproject.toml", contents),
+                    want(&[dialect("bigquery"), large_files(), policy()]),
+                    "{contents}"
+                );
+            }
+        }
+
+        #[test]
+        fn an_unloadable_pyproject_counts_as_setting_every_default() {
+            for contents in [
+                &b"[tool.sqlfluff\n"[..],
+                b"# \xff\n[tool.ruff]\n",
+                b"tool = 1\n",
+            ] {
+                let dir = project();
+                fs::write(dir.path().join("pyproject.toml"), contents).expect("write");
+                assert_eq!(
+                    generated_in(dir.path()),
+                    None,
+                    "sqlfluff reports the broken file itself: {}",
+                    String::from_utf8_lossy(contents)
+                );
+            }
+        }
+
+        #[test]
+        fn a_pyproject_toml_directory_counts_as_setting_every_default() {
+            let dir = project();
+            fs::create_dir(dir.path().join("pyproject.toml")).expect("mkdir");
+            assert_eq!(generated_in(dir.path()), None);
+        }
+
+        #[test]
+        fn shared_ini_files_count_only_for_what_their_sqlfluff_section_sets() {
+            for name in ["setup.cfg", "tox.ini", "pep8.ini"] {
+                assert_eq!(
+                    generated_with(name, "[metadata]\nname = x\n\n[sqlfluff]\ndialect = ansi\n"),
+                    want(&[large_files(), policy()]),
+                    "{name} with a sqlfluff dialect"
+                );
+                assert_eq!(
+                    generated_with(name, "[metadata]\nname = x\ndialect = ansi\n"),
+                    want(&[dialect("bigquery"), large_files(), policy()]),
+                    "{name} without a sqlfluff section"
+                );
+                assert_eq!(
+                    generated_with(name, "[sqlfluff:rules]\ntab_space_size = 2\n"),
+                    want(&[dialect("bigquery"), large_files(), policy()]),
+                    "{name} with an unrelated sqlfluff section"
+                );
+            }
+        }
+
+        #[test]
+        fn comments_continuations_and_other_key_cases_do_not_count_as_set() {
+            let contents = "\
+[sqlfluff]
+# dialect = ansi
+; large_file_skip_byte_limit = 20000
+  # unquoted_identifiers_policy = all
+exclude_rules = LT05
+    dialect = ansi
+Dialect = ansi
+LARGE_FILE_SKIP_BYTE_LIMIT = 20000
+
+[sqlfluff:rules]
+tab_space_size = 4
+    unquoted_identifiers_policy = all
+; unquoted_identifiers_policy = all
+";
+            assert_eq!(
+                generated_with(".sqlfluff", contents),
+                want(&[dialect("bigquery"), large_files(), policy()])
+            );
+        }
+
+        // -- where sqlfluff finds the config ----------------------------
+
+        #[test]
+        fn user_level_config_omits_the_defaults_it_sets() {
+            let dir = project();
+            let home = tempfile::tempdir().expect("tempdir");
+            let appdir = home.path().join(".config/sqlfluff");
+            fs::create_dir_all(&appdir).expect("mkdirs");
+            fs::write(
+                appdir.join(".sqlfluff"),
+                "[sqlfluff]\nlarge_file_skip_byte_limit = 20000\n",
+            )
+            .expect("write config");
+            let env = hermetic_with_user_dirs(dir.path(), vec![home.path().to_path_buf(), appdir]);
+            assert_eq!(
+                generated_for(env, &Config::default(), &[dir.path().join("q.sql")]),
+                want(&[dialect("bigquery"), policy()])
+            );
+        }
+
+        #[test]
+        fn user_level_config_in_the_home_and_a_pyproject_appdir_both_count() {
+            let dir = project();
+            let home = tempfile::tempdir().expect("tempdir");
+            let appdir = home.path().join(".config/sqlfluff");
+            fs::create_dir_all(&appdir).expect("mkdirs");
+            fs::write(
+                home.path().join(".sqlfluff"),
+                "[sqlfluff]\ndialect = ansi\n",
+            )
+            .expect("write config");
+            fs::write(
+                appdir.join("pyproject.toml"),
+                "[tool.sqlfluff.rules.\"capitalisation.identifiers\"]\n\
+                 unquoted_identifiers_policy = \"all\"\n",
+            )
+            .expect("write config");
+            let env = hermetic_with_user_dirs(dir.path(), vec![home.path().to_path_buf(), appdir]);
+            assert_eq!(
+                generated_for(env, &Config::default(), &[dir.path().join("q.sql")]),
+                want(&[large_files()])
+            );
+        }
+
+        #[test]
+        fn a_user_setup_cfg_without_a_sqlfluff_section_changes_nothing() {
+            let dir = project();
+            let home = tempfile::tempdir().expect("tempdir");
+            fs::write(home.path().join("setup.cfg"), "[metadata]\nname = x\n").expect("write");
+            let env = hermetic_with_user_dirs(dir.path(), vec![home.path().to_path_buf()]);
+            assert_eq!(
+                generated_for(env, &Config::default(), &[dir.path().join("q.sql")]),
+                want(&[dialect("bigquery"), large_files(), policy()])
+            );
+        }
+
+        #[test]
+        fn config_in_a_parent_directory_within_the_project_counts() {
+            let dir = project();
+            fs::write(dir.path().join(".sqlfluff"), "[sqlfluff]\ndialect = ansi\n")
+                .expect("write config");
+            let nested = dir.path().join("analysis/queries");
+            fs::create_dir_all(&nested).expect("mkdirs");
+            assert_eq!(
+                generated_for(
+                    hermetic(dir.path()),
+                    &Config::default(),
+                    &[nested.join("q.sql")]
+                ),
+                want(&[large_files(), policy()])
+            );
+        }
+
+        #[test]
+        fn repository_boundaries_do_not_stop_the_walk() {
+            // sqlfluff does not stop at `.git`: config between the
+            // repository and the home directory still applies.
+            let home = project();
+            let work = home.path().join("work");
+            let repo = work.join("repo");
+            fs::create_dir_all(repo.join(".git")).expect("mkdirs");
+            fs::write(work.join(".sqlfluff"), "[sqlfluff]\ndialect = ansi\n")
+                .expect("write config");
+            let env = ConfigEnv {
+                home: Some(home.path().to_path_buf()),
+                cwd: Some(repo.clone()),
+                user_dirs: Vec::new(),
+            };
+            assert_eq!(
+                generated_for(env, &Config::default(), &[repo.join("q.sql")]),
+                want(&[large_files(), policy()])
+            );
+        }
+
+        #[test]
+        fn config_above_home_counts_only_on_the_working_directory_chain() {
+            let outer = project();
+            fs::write(
+                outer.path().join(".sqlfluff"),
+                "[sqlfluff]\ndialect = ansi\n",
+            )
+            .expect("write config");
+            let home = outer.path().join("home");
+            let repo = home.join("repo");
+            fs::create_dir_all(&repo).expect("mkdirs");
+            let files = vec![repo.join("q.sql")];
+
+            let from_repo = ConfigEnv {
+                home: Some(home.clone()),
+                cwd: Some(repo.clone()),
+                user_dirs: Vec::new(),
+            };
+            assert_eq!(
+                generated_for(from_repo.clone(), &Config::default(), &files),
+                want(&[dialect("bigquery"), large_files(), policy()]),
+                "config above home is not read"
+            );
+
+            let from_outer = ConfigEnv {
+                cwd: Some(outer.path().to_path_buf()),
+                ..from_repo
+            };
+            assert_eq!(
+                generated_for(from_outer, &Config::default(), &files),
+                want(&[large_files(), policy()]),
+                "the working directory's walk down to the file reads it"
+            );
+        }
+
+        #[test]
+        fn config_in_the_working_directory_counts_for_files_elsewhere() {
+            // sqlfluff's root config reads the working directory even when
+            // the files live in a sibling directory.
+            let home = project();
+            let cwd = home.path().join("run");
+            let elsewhere = home.path().join("data");
+            fs::create_dir_all(&cwd).expect("mkdirs");
+            fs::create_dir_all(&elsewhere).expect("mkdirs");
+            fs::write(cwd.join(".sqlfluff"), "[sqlfluff]\ndialect = ansi\n").expect("write config");
+            let env = ConfigEnv {
+                home: Some(home.path().to_path_buf()),
+                cwd: Some(cwd),
+                user_dirs: Vec::new(),
+            };
+            assert_eq!(
+                generated_for(env, &Config::default(), &[elsewhere.join("q.sql")]),
+                want(&[large_files(), policy()])
+            );
+        }
+
+        #[test]
+        fn a_dot_sqlfluff_reached_only_through_dot_dot_does_not_count() {
+            let dir = project();
+            let sub = dir.path().join("sub");
+            fs::create_dir_all(&sub).expect("mkdirs");
+            fs::write(sub.join(".sqlfluff"), "[sqlfluff]\ndialect = ansi\n").expect("write config");
+            assert_eq!(
+                generated_for(
+                    hermetic(dir.path()),
+                    &Config::default(),
+                    &[PathBuf::from("sub/../z.sql")]
+                ),
+                want(&[dialect("bigquery"), large_files(), policy()])
+            );
+            assert_eq!(
+                generated_for(
+                    hermetic(dir.path()),
+                    &Config::default(),
+                    &[PathBuf::from("sub/z.sql")]
+                ),
+                want(&[large_files(), policy()])
+            );
+        }
+
+        // -- grouping ---------------------------------------------------
+
+        #[test]
+        fn files_whose_configs_set_different_defaults_run_separately_and_results_combine() {
+            let dir = project();
+            let a = dir.path().join("a");
+            let b = dir.path().join("b");
+            fs::create_dir_all(&a).expect("mkdirs");
+            fs::create_dir_all(&b).expect("mkdirs");
+            fs::write(a.join(".sqlfluff"), "[sqlfluff]\ndialect = duckdb\n").expect("write config");
+            let qa = a.join("q.sql");
+            let qb = b.join("q.sql");
+            let rb = b.join("r.sql");
+            let files = vec![qa.clone(), qb.clone(), rb.clone()];
+            let mut sorted_files = files.clone();
+            sorted_files.sort();
+            let adapter = hermetic_adapter(dir.path());
+            let config = Config::default();
+
+            let (runs, diagnostics) = lint_runs(&adapter, &config, &files);
+            assert_eq!(runs.len(), 2, "one run per set of defaults: {runs:?}");
+            let run_a = runs
+                .iter()
+                .find(|r| r.names(&qa))
+                .expect("a run for a/q.sql");
+            let run_b = runs
+                .iter()
+                .find(|r| r.names(&qb))
+                .expect("a run for b/q.sql");
+            assert!(!run_a.names(&qb) && !run_a.names(&rb), "{run_a:?}");
+            assert!(run_b.names(&rb), "files that agree share a run: {run_b:?}");
+            assert_eq!(run_a.generated(), want(&[large_files(), policy()]));
+            assert_eq!(
+                run_b.generated(),
+                want(&[dialect("bigquery"), large_files(), policy()])
+            );
+            let mut linted: Vec<PathBuf> = diagnostics.iter().map(|d| d.path.clone()).collect();
+            linted.sort();
+            assert_eq!(linted, sorted_files, "findings from every run are reported");
+
+            let (runs, outcome) = record(&adapter, &config, |a, ctx| {
+                a.format(&files, true, ctx).expect("format --check")
+            });
+            assert_eq!(runs.len(), 2, "{runs:?}");
+            assert_eq!(outcome.processed, 3);
+            let mut changed = outcome.changed.clone();
+            changed.sort();
+            assert_eq!(
+                changed, sorted_files,
+                "check results from every run combine"
+            );
+
+            for file in &files {
+                fs::write(file, "select  1\n").expect("write");
+            }
+            let (runs, outcome) = record(&adapter, &config, |a, ctx| {
+                a.format(&files, false, ctx).expect("format")
+            });
+            assert_eq!(runs.len(), 2, "{runs:?}");
+            assert_eq!(outcome.processed, 3);
+            let mut changed = outcome.changed.clone();
+            changed.sort();
+            assert_eq!(
+                changed, sorted_files,
+                "format results from every run combine"
+            );
+        }
+
+        #[test]
+        fn files_whose_configs_set_the_same_defaults_share_one_run() {
+            let dir = project();
+            let a = dir.path().join("a");
+            let b = dir.path().join("b");
+            fs::create_dir_all(&a).expect("mkdirs");
+            fs::create_dir_all(&b).expect("mkdirs");
+            fs::write(a.join(".sqlfluff"), "[sqlfluff]\ndialect = duckdb\n").expect("write config");
+            fs::write(b.join(".sqlfluff"), "[sqlfluff]\ndialect = ansi\n").expect("write config");
+            let files = vec![a.join("q.sql"), b.join("q.sql")];
+            let run = single_run(hermetic(dir.path()), &Config::default(), &files);
+            assert!(files.iter().all(|f| run.names(f)), "{run:?}");
+            assert_eq!(run.generated(), want(&[large_files(), policy()]));
+        }
+
+        // -- argument order ---------------------------------------------
+
+        #[test]
+        fn the_generated_config_comes_before_the_escape_hatch_and_the_files() {
+            let dir = project();
+            let file = dir.path().join("q.sql");
+            let mut config = Config::default();
+            config.tools.args.insert(
+                TOOL.to_string(),
+                vec!["--templater".to_string(), "raw".to_string()],
+            );
+            let run = single_run(hermetic(dir.path()), &config, std::slice::from_ref(&file));
+            assert_eq!(
+                run.generated(),
+                want(&[dialect("bigquery"), large_files(), policy()])
+            );
+            let at = |wanted: &str| {
+                run.args
+                    .iter()
+                    .position(|a| a == wanted)
+                    .unwrap_or_else(|| panic!("{wanted} in {:?}", run.args))
+            };
+            let config_at = at("--config");
+            let templater_at = at("--templater");
+            let file_at = at(&file.to_string_lossy());
+            assert!(
+                config_at < templater_at && templater_at < file_at,
+                "generated config, then escape hatch (so it can override), then files: {:?}",
+                run.args
+            );
+            assert_eq!(run.args[0], "lint", "{:?}", run.args);
+            assert!(
+                run.args.iter().any(|a| a == "--disable-progress-bar"),
+                "{:?}",
+                run.args
+            );
+        }
+
+        #[test]
+        fn check_mode_passes_the_generated_config_too() {
+            let dir = project();
+            let file = dir.path().join("q.sql");
+            let adapter = hermetic_adapter(dir.path());
+            let (runs, _) = record(&adapter, &Config::default(), |a, ctx| {
+                a.format(std::slice::from_ref(&file), true, ctx)
+                    .expect("format --check")
+            });
+            assert_eq!(runs.len(), 1, "{runs:?}");
+            assert_eq!(
+                runs[0].generated(),
+                want(&[dialect("bigquery"), large_files(), policy()])
+            );
+        }
+
+        // -- a config named in the escape hatch -------------------------
+
+        /// A sqlfluff config `custom.cfg` holding `contents`, in its own
+        /// directory next to existing `macros` and `dbt` directories.
+        fn custom_config(contents: &str) -> (tempfile::TempDir, PathBuf) {
+            let dir = tempfile::tempdir().expect("tempdir");
+            fs::create_dir_all(dir.path().join("macros")).expect("mkdirs");
+            fs::create_dir_all(dir.path().join("dbt")).expect("mkdirs");
+            let path = dir.path().join("custom.cfg");
+            fs::write(&path, contents).expect("write custom config");
+            (dir, path)
+        }
+
+        /// `[tools.sqlfluff] args` naming `path` as `--config path`
+        /// (`joined` false) or `--config=path`, followed by `--processes 1`.
+        fn config_args(path: &Path, joined: bool) -> Config {
+            let path = path.to_string_lossy().into_owned();
+            let mut args = if joined {
+                vec![format!("--config={path}")]
+            } else {
+                vec!["--config".to_string(), path]
+            };
+            args.extend(["--processes".to_string(), "1".to_string()]);
+            let mut config = Config::default();
+            config.tools.args.insert(TOOL.to_string(), args);
+            config
+        }
+
+        /// Checks that `run` passes one generated config in place of
+        /// `custom`, keeps the other escape-hatch arguments, and returns the
+        /// generated config's text.
+        fn replaced_config<'a>(run: &'a Invocation, custom: &Path) -> &'a str {
+            let flags = run.config_flags();
+            assert_eq!(flags.len(), 1, "one --config: {:?}", run.args);
+            assert_ne!(Path::new(flags[0]), custom, "{:?}", run.args);
+            let custom = custom.to_string_lossy();
+            assert!(
+                !run.args.iter().any(|a| a.contains(custom.as_ref())),
+                "the named config is not passed itself: {:?}",
+                run.args
+            );
+            let processes = run
+                .args
+                .iter()
+                .position(|a| a == "--processes")
+                .unwrap_or_else(|| panic!("other escape-hatch args stay: {:?}", run.args));
+            assert_eq!(run.args.get(processes + 1).map(String::as_str), Some("1"));
+            run.config.as_deref().expect("a generated config")
+        }
+
+        #[test]
+        fn an_escape_hatch_config_is_merged_with_the_defaults_into_one_generated_config() {
+            for joined in [false, true] {
+                let dir = project();
+                let (custom_dir, custom) = custom_config(
+                    "[sqlfluff]\ntemplater = jinja\n\n\
+                     [sqlfluff:templater:jinja]\napply_dbt_builtins = False\n",
+                );
+                let config = config_args(&custom, joined);
+                let run = single_run(hermetic(dir.path()), &config, &[dir.path().join("q.sql")]);
+                let text = replaced_config(&run, &custom);
+                assert_eq!(headers(text, CORE), 1, "no duplicate section:\n{text}");
+                assert_eq!(
+                    run.generated(),
+                    want(&[
+                        setting(CORE, "templater", "jinja"),
+                        setting("sqlfluff:templater:jinja", "apply_dbt_builtins", "False"),
+                        dialect("bigquery"),
+                        large_files(),
+                        policy(),
+                    ]),
+                    "joined form: {joined}"
+                );
+                drop(custom_dir);
+            }
+        }
+
+        #[test]
+        fn an_escape_hatch_config_keeps_its_settings_and_counts_for_every_file() {
+            let dir = project();
+            fs::write(
+                dir.path().join(".sqlfluff"),
+                "[sqlfluff]\nlarge_file_skip_byte_limit = 20000\n",
+            )
+            .expect("write config");
+            let (_custom_dir, custom) = custom_config(
+                "[sqlfluff]\ndialect = duckdb\n\n\
+                 [sqlfluff:rules:capitalisation.identifiers]\nignore_words = foo\n",
+            );
+            let config = config_args(&custom, false);
+            let run = single_run(hermetic(dir.path()), &config, &[dir.path().join("q.sql")]);
+            let text = replaced_config(&run, &custom);
+            assert_eq!(headers(text, CORE), 1, "{text}");
+            assert_eq!(headers(text, IDENTIFIERS), 1, "{text}");
+            assert_eq!(
+                run.generated(),
+                want(&[
+                    dialect("duckdb"),
+                    setting(IDENTIFIERS, "ignore_words", "foo"),
+                    policy(),
+                ])
+            );
+        }
+
+        #[test]
+        fn escape_hatch_config_paths_resolve_against_its_own_directory() {
+            let dir = project();
+            let (custom_dir, custom) = custom_config(
+                "[sqlfluff:templater:jinja]\n\
+                 library_path = macros\n\
+                 load_macros_from_path = macros, missing_macros\n\n\
+                 [sqlfluff:templater:dbt]\n\
+                 project_dir = dbt\n\
+                 profiles_dir = missing_profiles\n",
+            );
+            let config = config_args(&custom, false);
+            let run = single_run(hermetic(dir.path()), &config, &[dir.path().join("q.sql")]);
+            let text = replaced_config(&run, &custom);
+            assert_eq!(headers(text, CORE), 1, "{text}");
+            let macros = custom_dir.path().join("macros").display().to_string();
+            let dbt = custom_dir.path().join("dbt").display().to_string();
+            assert_eq!(
+                run.generated(),
+                want(&[
+                    setting("sqlfluff:templater:jinja", "library_path", &macros),
+                    setting(
+                        "sqlfluff:templater:jinja",
+                        "load_macros_from_path",
+                        &format!("{macros},missing_macros")
+                    ),
+                    setting("sqlfluff:templater:dbt", "project_dir", &dbt),
+                    setting("sqlfluff:templater:dbt", "profiles_dir", "missing_profiles"),
+                    dialect("bigquery"),
+                    large_files(),
+                    policy(),
+                ])
+            );
+        }
+
+        #[test]
+        fn an_escape_hatch_pyproject_or_unreadable_config_is_passed_untouched() {
+            let dir = project();
+            let elsewhere = tempfile::tempdir().expect("tempdir");
+            let pyproject = elsewhere.path().join("pyproject.toml");
+            fs::write(&pyproject, "[tool.sqlfluff.core]\ndialect = \"ansi\"\n").expect("write");
+            let missing = elsewhere.path().join("missing.cfg");
+            let file = dir.path().join("q.sql");
+            for (named, joined) in [
+                (&pyproject, false),
+                (&pyproject, true),
+                (&missing, false),
+                (&missing, true),
+            ] {
+                let config = config_args(named, joined);
+                let run = single_run(hermetic(dir.path()), &config, std::slice::from_ref(&file));
+                let extra = config.tools.args.get(TOOL).expect("args").clone();
+                let mut expected = vec![
+                    "lint".to_string(),
+                    "--format".to_string(),
+                    "json".to_string(),
+                    "--disable-progress-bar".to_string(),
+                ];
+                expected.extend(extra);
+                expected.push(file.to_string_lossy().into_owned());
+                assert_eq!(
+                    run.args,
+                    expected,
+                    "no defaults are added for {}",
+                    named.display()
+                );
+            }
+        }
     }
 
     // ---- batch hygiene ------------------------------------------------

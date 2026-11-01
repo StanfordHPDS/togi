@@ -1135,4 +1135,35 @@ mod online {
             .success()
             .stdout(predicate::str::contains("nothing would change"));
     }
+
+    #[test]
+    #[ignore = "downloads the real managed tools from the network"]
+    fn a_project_sqlfluff_config_keeps_togi_sql_defaults_it_does_not_set() {
+        // The project's own config only supplies template values, so togi's
+        // dialect and identifier policy still apply.
+        let sb = Sandbox::empty();
+        let home = sb.fake_home();
+        fs::write(
+            sb.project.join(".sqlfluff"),
+            "[sqlfluff:templater:jinja:context]\npred_year = 2016\n",
+        )
+        .expect("write .sqlfluff");
+        fs::write(sb.project.join("pred.sql"), "select {{ pred_year }} as y\n")
+            .expect("write pred.sql");
+        fs::write(
+            sb.project.join("mixed.sql"),
+            "select\n    UserId,\n    user_name\nfrom events\n",
+        )
+        .expect("write mixed.sql");
+
+        sb.cmd_with_home(&home, &["lint"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("CP02").not())
+            .stderr(predicate::str::contains("No dialect").not());
+        sb.cmd_with_home(&home, &["format", "--check"])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("No dialect").not());
+    }
 }
